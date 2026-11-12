@@ -81,3 +81,58 @@ encabezado mal reconocido; `tests/test_corpus.py` los convierte en prueba.
 
 "Permanentes" incluye Bis, Ter, -A, etc. Los 21 primeros artículos del CCF (Disposiciones
 Preliminares) no tienen título ni capítulo; es correcto.
+
+## Fase 2. Indexación y búsqueda híbrida
+
+### Dos tablas: `articles` para citar, `chunks` para embeddings
+El plan pedía un `vector(1024)` por artículo, pero bge-m3 trunca a 512 tokens y hay artículos
+enormes: LFT 513 (tabla de enfermedades de trabajo) tiene 288 mil caracteres y CPEUM 123, 31 mil.
+Con un solo vector, todo lo que pasa del token 512 sería invisible para la búsqueda vectorial.
+- `articles`: un renglón por artículo con metadatos, texto completo y `tsvector`. Es lo que se cita.
+- `chunks`: fragmentos de ≤1500 caracteres (~400 tokens), cortados por párrafo, cada uno con su
+  embedding y su `article_id`. Cada fragmento empieza con "Ley Federal del Trabajo, artículo 61.
+  Capítulo II. Jornada de trabajo" para que una fracción suelta conserve su contexto.
+- La búsqueda vectorial toma la distancia del mejor fragmento de cada artículo. La unidad que
+  devuelve la búsqueda sigue siendo el artículo.
+- Resultado: 5,089 artículos y 5,524 fragmentos. Los derogados se guardan en `articles` (para
+  `obtener_articulo`) pero no se fragmentan, porque "Se deroga." solo mete ruido.
+
+### Texto completo en español sin acentos
+Configuración `es` = `spanish` + `unaccent`, para que "jornada maxima" encuentre "máxima". La
+consulta se convierte de AND a OR (`plainto_tsquery` → `|`): una pregunta en lenguaje natural casi
+nunca tiene todas sus palabras en un mismo artículo. `ts_rank` con normalización 1 (divide entre el
+log de la longitud) evita que los artículos gigantes ganen por tener más palabras.
+
+### Por qué RRF y k = 60
+Reciprocal Rank Fusion: `score(d) = Σ 1 / (k + rango_i(d))`. Usa solo posiciones, así que no hay
+que calibrar distancias coseno contra puntajes de `ts_rank`, que viven en escalas distintas y
+cambian de una consulta a otra. k = 60 es el valor del artículo original (Cormack et al., 2009) y el
+estándar de facto: con k grande, aparecer en ambas listas pesa más que quedar primero en solo una.
+Se puede ajustar con `RRF_K` y se revisará con la evaluación de la Fase 6.
+
+### HNSW con escaneo iterativo
+Índice HNSW (`m=16`, `ef_construction=64`) sobre los fragmentos. Con filtro por ley, HNSW puede
+devolver menos filas de las pedidas porque filtra después de buscar; `hnsw.iterative_scan =
+relaxed_order` (pgvector ≥ 0.8) sigue recorriendo el índice hasta juntar suficientes.
+
+### Indexación idempotente
+Cada artículo guarda un hash de su contenido. Al reindexar solo se recalculan embeddings de los que
+cambiaron, y se borran los que ya no están en el corpus. La primera indexación tarda 40 min en CPU
+(Ryzen 5 4600H, ~1,200 caracteres/s); las siguientes, segundos.
+
+### El reranker en CPU es el cuello de botella
+| Etapa | Latencia (CPU, sin GPU) |
+| --- | --- |
+| Búsqueda híbrida (embedding de la consulta + vector + texto + RRF) | ~300 ms |
+| Reranker bge-reranker-v2-m3, 20 candidatos, lote 32 | 20.6 s |
+| Reranker, lote 4 (rellenar al fragmento más largo de un lote grande cuesta caro) | 8.6 s |
+
+El reranker sí mejora el orden: en "jornada máxima de trabajo" sube LFT 61 del lugar 14 al 5. El
+criterio de "menos de un segundo" se cumple con la búsqueda híbrida. El reranker queda detrás de
+`RERANKER_ENABLED` para poder apagarlo en desarrollo. Que se quede encendido, se cambie por uno más
+ligero o se cuantice se decidirá con números de la Fase 6.
+
+### Hallazgo: LFT 59 tras la reforma de 2026
+La prueba de la guía pide LFT 61 para "jornada máxima de trabajo". Con la reforma publicada en el
+DOF el 01-05-2026, el artículo 59 dice "La duración máxima de la jornada ordinaria de trabajo será
+de cuarenta horas semanales", y el reranker lo pone primero. La prueba exige ambos (59 y 61) en el top 5.

@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     # Base de datos
     database_url: str = "postgresql://articulia:articulia@localhost:5432/articulia"
 
+    # Recuperación
+    embedding_model: str = "BAAI/bge-m3"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    rrf_k: int = 60
+    rerank_candidates: int = 20
+    # En CPU el reranker tarda ~7 s por consulta (20 candidatos); se puede apagar para desarrollo.
+    reranker_enabled: bool = True
+
     # LangSmith
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None

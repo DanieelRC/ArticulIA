@@ -24,6 +24,15 @@ uv run python -m articulia.ingest
 
 Genera `data/processed/<LEY>.jsonl` con un artículo por línea e imprime un resumen de validación.
 
+Después indexa en PostgreSQL (texto completo + embeddings con `BAAI/bge-m3` en CPU; la primera vez
+descarga los modelos, ~4.5 GB entre embeddings y reranker):
+
+```bash
+uv run python -m articulia.ingest.index
+```
+
+Es idempotente: solo recalcula embeddings de artículos cuyo contenido cambió.
+
 ## Limitaciones
 
 No sustituye asesoría legal.
