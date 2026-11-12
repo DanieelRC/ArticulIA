@@ -53,7 +53,7 @@ Una expresión regular cubre las variantes reales del corpus: `Artículo 5o.-`, 
   de otra ley dentro de una "Nota:" editorial, no un artículo del Código.
 
 Los números se normalizan (`5o.` → `5`, `103-Bis` → `103 Bis`, `410 A` → `410-A`) y el id es
-`<LEY>-<numero>` (`LFT-61`, `LFT-47_Bis`), o `<LEY>-T-<numero>` para transitorios.
+`<LEY>-<numero>` (`LFT-61`, `LFT-42_Bis`), o `<LEY>-T-<numero>` para transitorios.
 
 ### Notas de reforma fuera del texto
 Líneas como "Párrafo reformado DOF 10-06-2011" se guardan en `reformas` y no en `texto`: no son
