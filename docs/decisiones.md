@@ -136,3 +136,62 @@ ligero o se cuantice se decidirá con números de la Fase 6.
 La prueba de la guía pide LFT 61 para "jornada máxima de trabajo". Con la reforma publicada en el
 DOF el 01-05-2026, el artículo 59 dice "La duración máxima de la jornada ordinaria de trabajo será
 de cuarenta horas semanales", y el reranker lo pone primero. La prueba exige ambos (59 y 61) en el top 5.
+
+## Fase 3. Agente con LangGraph
+
+### Grafo
+
+```mermaid
+graph TD
+    START([inicio]) --> razonar
+    razonar -- pide herramientas --> herramientas
+    herramientas --> razonar
+    razonar -- ya puede responder --> generar
+    razonar -- 5 iteraciones --> abstenerse
+    generar --> verificar
+    verificar -- citas válidas y respaldadas --> FIN([fin])
+    verificar -- sin_evidencia del modelo --> FIN
+    verificar -- falla, primer intento --> razonar
+    verificar -- falla otra vez o 5 iteraciones --> abstenerse
+    abstenerse --> FIN
+```
+
+- **razonar**: el LLM con las tres herramientas enlazadas decide qué buscar o si ya basta.
+- **herramientas**: ejecuta las llamadas, valida argumentos con Pydantic y guarda lo recuperado en
+  `state["articulos"]`. Un error (argumento faltante, ley inexistente) vuelve al modelo como
+  `ToolMessage` para que corrija, en vez de romper el grafo.
+- **generar**: salida estructurada `Respuesta {respuesta, citas, sin_evidencia}`.
+- **verificar**: dos capas. Primero una determinista: cada cita `[LEY, art. N]` del texto debe estar
+  entre los artículos recuperados en esta conversación (no basta con que exista en la base: el
+  modelo tuvo que leerla). Si pasa, un juicio del LLM con salida `Verificacion {respaldada,
+  problemas}` revisa que cada afirmación diga lo que dice el artículo citado.
+- **abstenerse**: respuesta fija que explica el alcance del corpus. No pasa por el LLM, para que la
+  abstención nunca invente.
+
+### Nodo de herramientas propio en vez de `ToolNode`
+`ToolNode` de LangGraph solo agrega `ToolMessage`s. El verificador necesita saber qué artículos se
+recuperaron (para comparar las citas), así que el nodo propio actualiza también
+`state["articulos"]` con un reducer que fusiona diccionarios. Además aplica el filtro de ley que
+el usuario eligió en la interfaz, aunque el modelo olvide pasarlo.
+
+### Las citas salen del texto, no del campo `citas`
+El texto es lo que lee la persona. Si el modelo pone una cita en el texto que no está en `citas`,
+o al revés, manda el texto: las citas se extraen con regex (`extraer_citas`) y el campo
+estructurado queda como respaldo.
+
+### Artículos como datos, no instrucciones
+Todo texto recuperado se envuelve en `<articulo id=... cita=...>...</articulo>` y los tres prompts
+dicen que lo de adentro es material de consulta. `formatear_articulo` elimina cualquier
+`</articulo>` dentro del texto para que un documento no pueda cerrar la etiqueta y colar órdenes.
+
+### Inyección de dependencias para probar sin LLM ni base
+`build_graph(llm, corpus)` recibe el modelo y un `Corpus` (protocolo con `buscar` y `obtener`).
+Las pruebas usan un LLM guionizado y un corpus en memoria con texto real de la LFT y cubren el
+camino feliz, el reintento tras una cita no recuperada, la abstención tras dos fallos, la abstención
+del propio modelo, el límite de iteraciones y el error de herramienta.
+`tests/test_agent_real.py` corre de punta a punta con el LLM configurado y se salta sin API key.
+
+### Proveedor por variable de entorno
+`articulia/llm.py` crea `ChatGoogleGenerativeAI`, `ChatAnthropic` o `ChatXAI` según
+`LLM_PROVIDER`, siempre con temperatura 0. Los tres soportan `bind_tools` y
+`with_structured_output`, que es todo lo que usa el grafo.

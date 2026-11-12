@@ -1,0 +1,143 @@
+"""Herramientas del agente: buscar, obtener un artículo y comparar entre leyes.
+
+Las funciones reciben un `Corpus` para poder probarse sin base de datos. El agente y el servidor MCP
+(Fase 8) usan las mismas funciones.
+"""
+
+import re
+from typing import Protocol
+
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+
+from articulia.ingest.loader import LEYES
+
+
+class Corpus(Protocol):
+    """Acceso al corpus indexado."""
+
+    def buscar(self, consulta: str, leyes: list[str] | None, top_k: int) -> list[dict]:
+        """Artículos relevantes para la consulta."""
+        ...
+
+    def obtener(self, ley: str, numero: str) -> dict | None:
+        """Un artículo por ley y número, o None si no existe."""
+        ...
+
+
+class PostgresCorpus:
+    """Corpus respaldado por PostgreSQL (búsqueda híbrida + reranker)."""
+
+    def __init__(self, conn: object | None = None) -> None:
+        from articulia.db import connect
+
+        self.conn = conn or connect(autocommit=True)
+
+    def buscar(self, consulta: str, leyes: list[str] | None, top_k: int) -> list[dict]:
+        """Ver `articulia.retrieval.rerank.search`."""
+        from articulia.retrieval.rerank import search
+
+        return [r.model_dump(mode="json") for r in search(self.conn, consulta, leyes, top_k)]
+
+    def obtener(self, ley: str, numero: str) -> dict | None:
+        """Busca por id normalizado; acepta '5o', '123 bis', '39-a'."""
+        numero = re.sub(r"^(\d+)\s*[oº°]?\.?$", r"\1", numero.strip())  # '5o.' -> '5'
+        row = self.conn.execute(
+            "SELECT id, ley, ley_nombre, numero, tipo, titulo, capitulo, texto, url, "
+            "fecha_ultima_reforma, derogado FROM articles "
+            "WHERE ley = %s AND lower(numero) = lower(%s) ORDER BY tipo LIMIT 1",
+            (ley.upper(), numero.replace("_", " ")),
+        ).fetchone()
+        if row is None:
+            return None
+        cols = ("id", "ley", "ley_nombre", "numero", "tipo", "titulo", "capitulo", "texto",
+                "url", "fecha_ultima_reforma", "derogado")  # fmt: skip
+        art = dict(zip(cols, row, strict=True))
+        art["fecha_ultima_reforma"] = str(art["fecha_ultima_reforma"])
+        return art
+
+
+def formatear_articulo(art: dict) -> str:
+    """Representa un artículo como DATOS delimitados, nunca como instrucciones.
+
+    El texto recuperado va dentro de etiquetas <articulo>; el prompt del sistema indica que lo que
+    está dentro de esas etiquetas es material de consulta y no órdenes (defensa básica contra
+    prompt injection a través del corpus).
+    """
+    tipo = "transitorio" if art.get("tipo") == "transitorio" else "art."
+    cita = f"[{art['ley']}, {tipo} {art['numero']}]"
+    ubicacion = " · ".join(x for x in (art.get("titulo"), art.get("capitulo")) if x)
+    texto = art.get("texto", "").replace("</articulo>", "")
+    return (
+        f'<articulo id="{art["id"]}" cita="{cita}" ley="{art.get("ley_nombre", art["ley"])}"'
+        f' ubicacion="{ubicacion}">\n{texto}\n</articulo>'
+    )
+
+
+# --- Esquemas de entrada (validan lo que manda el LLM) ---------------------------------------
+
+_CLAVES = ", ".join(LEYES)
+
+
+class BuscarArgs(BaseModel):
+    consulta: str = Field(description="Qué buscar, en lenguaje natural o términos legales.")
+    ley: str | None = Field(default=None, description=f"Filtrar por una ley: {_CLAVES}.")
+
+
+class ObtenerArgs(BaseModel):
+    ley: str = Field(description=f"Clave de la ley: {_CLAVES}.")
+    numero: str = Field(description="Número del artículo, p. ej. '61', '123', '47 Bis', '39-A'.")
+
+
+class CompararArgs(BaseModel):
+    tema: str = Field(description="Tema a comparar entre leyes.")
+    leyes: list[str] = Field(description=f"Dos o más claves de ley: {_CLAVES}.", min_length=2)
+
+
+def buscar_articulos(corpus: Corpus, consulta: str, ley: str | None = None) -> list[dict]:
+    """Búsqueda híbrida en el corpus, opcionalmente filtrada por ley."""
+    leyes = [ley.upper()] if ley else None
+    return corpus.buscar(consulta, leyes, 5)
+
+
+def obtener_articulo(corpus: Corpus, ley: str, numero: str) -> list[dict]:
+    """Texto completo de un artículo concreto (lista vacía si no existe)."""
+    art = corpus.obtener(ley.upper(), numero)
+    return [art] if art else []
+
+
+def comparar(corpus: Corpus, tema: str, leyes: list[str]) -> list[dict]:
+    """Los 3 artículos más relevantes sobre un tema en cada ley indicada."""
+    out: list[dict] = []
+    for ley in leyes:
+        out.extend(corpus.buscar(tema, [ley.upper()], 3))
+    return out
+
+
+TOOL_FUNCS = {
+    "buscar_articulos": (buscar_articulos, BuscarArgs),
+    "obtener_articulo": (obtener_articulo, ObtenerArgs),
+    "comparar": (comparar, CompararArgs),
+}
+
+
+def tool_schemas() -> list[StructuredTool]:
+    """Definiciones de herramientas para `bind_tools` (la ejecución la hace el nodo de tools)."""
+    return [
+        StructuredTool.from_function(
+            func=lambda **_: None,
+            name=name,
+            description=(func.__doc__ or "").strip().splitlines()[0],
+            args_schema=schema,
+        )
+        for name, (func, schema) in TOOL_FUNCS.items()
+    ]
+
+
+def run_tool(corpus: Corpus, name: str, args: dict) -> list[dict]:
+    """Valida los argumentos del LLM y ejecuta la herramienta."""
+    if name not in TOOL_FUNCS:
+        raise ValueError(f"Herramienta desconocida: {name}")
+    func, schema = TOOL_FUNCS[name]
+    parsed = schema.model_validate(args)
+    return func(corpus, **parsed.model_dump())
