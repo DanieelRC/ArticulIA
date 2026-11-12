@@ -234,3 +234,39 @@ torch llegaba como dependencia transitiva y en Linux PyPI entrega la versión co
 Se declaró como dependencia directa con `[tool.uv.sources]` apuntando al índice CPU de PyTorch;
 `tool.uv.sources` solo aplica a dependencias directas, por eso no bastaba con configurar el índice.
 Los modelos no van en la imagen: Compose monta la caché de Hugging Face del host en `/models`.
+
+## Fase 5. Frontend
+
+### SSE con fetch, no con `EventSource`
+`EventSource` solo hace GET y `/ask/stream` es POST (la pregunta va en el cuerpo, no en la URL,
+donde quedaría en logs e historial). La interfaz lee el cuerpo con `fetch` + `TextDecoderStream` y
+un parser propio de SSE (`src/lib/sse.ts`) que tolera eventos partidos entre trozos de red.
+
+### Citas parseadas en el cliente con la misma regex que el backend
+La respuesta es texto con `[LFT, art. 61]` intercalado. El cliente lo parte en texto y botones
+con la misma expresión que `extraer_citas` del backend, y arma el id (`LFT-47_Bis`,
+`CPEUM-T-Primero`) igual. Así cada cita queda clicable en el lugar exacto donde respalda la
+afirmación, no solo en una lista al final (que también existe, como "Fuentes").
+
+### Panel del artículo
+- Texto en serif con los saltos de línea del PDF reacomodados en párrafos (un salto simple es el
+  ancho de la página; uno doble, un párrafo real).
+- Ubicación (título, capítulo), historial de reformas plegado, fecha de última reforma de la ley y
+  enlace al PDF oficial: lo que alguien necesita para confiar en la cita sin salir de la app.
+- En pantallas de menos de 900 px el panel cubre la pantalla; `Esc` lo cierra y el foco va al
+  botón de cerrar al abrirse.
+
+### Sin librería de UI ni de estado
+Son cuatro componentes y un `useState` de turnos. Una librería de componentes o de estado sumaría
+peso y decisiones que no aportan a la demo. CSS propio con variables y modo oscuro.
+
+### En Docker, nginx sirve la interfaz y redirige `/api`
+Mismo origen para la interfaz y la API, así que no hace falta CORS. `proxy_buffering off` es
+indispensable: con el buffer por defecto nginx junta los eventos SSE y los pasos del agente
+llegarían todos al final.
+
+### npm y `legacy-peer-deps`
+npm 10.9 truena (`Cannot read properties of null (reading 'edgesOut')`) al resolver los peers de
+vitest 5. `frontend/.npmrc` activa `legacy-peer-deps` y `@testing-library/dom` se declara
+explícitamente. Se usa vitest 5 porque la 3.x que npm elegía primero tiene avisos de seguridad
+críticos (tinypool, @vitest/mocker).

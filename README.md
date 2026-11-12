@@ -86,6 +86,24 @@ curl -N -X POST localhost:8000/ask/stream -H "Content-Type: application/json" \
 **Errores:** 422 si la entrada no es válida, 404 si el artículo no existe, 503 si falta la API key
 del LLM o la base no responde, 500 con un mensaje genérico (el detalle queda en los logs).
 
+## Interfaz web
+
+Con `docker compose up -d --build` queda en http://localhost:3000 (nginx sirve la interfaz y
+redirige `/api` a FastAPI). Para desarrollarla con recarga en caliente:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Abre http://localhost:5173; Vite redirige `/api` a `localhost:8000`. Pruebas: `npm test`.
+
+- Muestra los pasos del agente mientras trabaja (`/ask/stream`).
+- Cada cita `[LFT, art. 61]` es un botón que abre el texto completo del artículo en un panel lateral,
+  con su ubicación en la ley, historial de reformas y enlace al PDF oficial.
+- Filtro por ley; sin selección busca en todo el corpus.
+
 ## Limitaciones
 
 No sustituye asesoría legal.
