@@ -10,9 +10,10 @@ def get_llm(settings: Settings | None = None) -> BaseChatModel:
     s = settings or get_settings()
 
     def key(secret: object) -> str:
-        if secret is None:
+        valor = secret.get_secret_value().strip() if secret is not None else ""  # type: ignore[attr-defined]
+        if not valor:  # `GOOGLE_API_KEY=` vacío en .env llega como cadena vacía, no como None
             raise RuntimeError(f"Falta la API key para LLM_PROVIDER={s.llm_provider} en .env")
-        return secret.get_secret_value()  # type: ignore[attr-defined]
+        return valor
 
     if s.llm_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI

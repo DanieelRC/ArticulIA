@@ -195,3 +195,42 @@ del propio modelo, el límite de iteraciones y el error de herramienta.
 `articulia/llm.py` crea `ChatGoogleGenerativeAI`, `ChatAnthropic` o `ChatXAI` según
 `LLM_PROVIDER`, siempre con temperatura 0. Los tres soportan `bind_tools` y
 `with_structured_output`, que es todo lo que usa el grafo.
+
+## Fase 4. API con FastAPI
+
+### Endpoints síncronos
+Las rutas son `def`, no `async def`. El agente, psycopg y los modelos son bloqueantes; FastAPI
+corre las rutas síncronas en su pool de hilos y así no se congela el event loop mientras un
+reranker tarda segundos. Un agente async completo (LLM async y psycopg async) no aporta nada con
+modelos locales en CPU.
+
+### Pool de conexiones
+Con varios hilos atendiendo, una sola conexión compartida no sirve. `PostgresCorpus` usa
+`psycopg_pool.ConnectionPool` (máx. 4) y registra el tipo `vector` en cada conexión nueva.
+
+### SSE nativo de FastAPI
+`/ask/stream` usa `EventSourceResponse` y `ServerSentEvent` de FastAPI (≥ 0.135) sobre
+`graph.stream(stream_mode="updates")`. Cada actualización de nodo se resume en un evento `paso`
+legible para la interfaz (herramientas pedidas, ids recuperados, problemas del verificador). Si algo
+falla con el stream ya abierto, no se puede cambiar el código HTTP, así que el error viaja como
+evento `error`.
+
+### Errores claros, sin filtrar detalles
+- 422 para entrada inválida (Pydantic): pregunta vacía o de solo espacios, más de 1000 caracteres,
+  o una ley que no está en el corpus (`Ley` es un enum).
+- 503 si falta la API key o la base no responde. Encontrado al probar: `GOOGLE_API_KEY=` vacío en
+  `.env` llegaba como cadena vacía, no como `None`, y producía un 500 confuso. Ahora se trata
+  igual que una clave ausente.
+- 500 genérico para lo inesperado; el traceback va al log, no al cliente.
+
+### Prompt injection
+La defensa está en la Fase 3: el texto recuperado va entre etiquetas `<articulo>`, se le quita
+cualquier `</articulo>` y los prompts lo declaran material de consulta. En la API se suma lo
+básico: límite de longitud y una pregunta que se trata como pregunta, nunca como prompt de sistema.
+El corpus viene de una fuente oficial, pero la defensa vale para cuando se agreguen fuentes.
+
+### Imagen Docker con torch CPU
+torch llegaba como dependencia transitiva y en Linux PyPI entrega la versión con CUDA (~3 GB más).
+Se declaró como dependencia directa con `[tool.uv.sources]` apuntando al índice CPU de PyTorch;
+`tool.uv.sources` solo aplica a dependencias directas, por eso no bastaba con configurar el índice.
+Los modelos no van en la imagen: Compose monta la caché de Hugging Face del host en `/models`.

@@ -28,3 +28,11 @@ def test_api_key_no_se_imprime(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "clave-secreta" not in repr(s)
     assert s.google_api_key is not None
     assert s.google_api_key.get_secret_value() == "clave-secreta"
+
+
+def test_api_key_vacia_da_error_claro(monkeypatch: pytest.MonkeyPatch) -> None:
+    from articulia.llm import get_llm
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    with pytest.raises(RuntimeError, match="Falta la API key"):
+        get_llm(Settings(_env_file=None))

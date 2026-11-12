@@ -26,35 +26,76 @@ class Corpus(Protocol):
 
 
 class PostgresCorpus:
-    """Corpus respaldado por PostgreSQL (búsqueda híbrida + reranker)."""
+    """Corpus respaldado por PostgreSQL (búsqueda híbrida + reranker).
 
-    def __init__(self, conn: object | None = None) -> None:
-        from articulia.db import connect
+    Usa un pool de conexiones: la API atiende peticiones en varios hilos y una conexión de
+    psycopg no debe compartirse entre consultas simultáneas.
+    """
 
-        self.conn = conn or connect(autocommit=True)
+    def __init__(self, max_size: int = 4) -> None:
+        from pgvector.psycopg import register_vector
+        from psycopg_pool import ConnectionPool
+
+        from articulia.config import get_settings
+
+        self.pool = ConnectionPool(
+            get_settings().database_url,
+            min_size=1,
+            max_size=max_size,
+            kwargs={"autocommit": True},
+            configure=register_vector,
+            open=True,
+        )
 
     def buscar(self, consulta: str, leyes: list[str] | None, top_k: int) -> list[dict]:
         """Ver `articulia.retrieval.rerank.search`."""
         from articulia.retrieval.rerank import search
 
-        return [r.model_dump(mode="json") for r in search(self.conn, consulta, leyes, top_k)]
+        with self.pool.connection() as conn:
+            return [r.model_dump(mode="json") for r in search(conn, consulta, leyes, top_k)]
 
     def obtener(self, ley: str, numero: str) -> dict | None:
-        """Busca por id normalizado; acepta '5o', '123 bis', '39-a'."""
+        """Busca por ley y número ('5o', '123 bis', '39-a'); permanentes antes que transitorios."""
         numero = re.sub(r"^(\d+)\s*[oº°]?\.?$", r"\1", numero.strip())  # '5o.' -> '5'
-        row = self.conn.execute(
-            "SELECT id, ley, ley_nombre, numero, tipo, titulo, capitulo, texto, url, "
-            "fecha_ultima_reforma, derogado FROM articles "
-            "WHERE ley = %s AND lower(numero) = lower(%s) ORDER BY tipo LIMIT 1",
-            (ley.upper(), numero.replace("_", " ")),
-        ).fetchone()
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT id, ley, ley_nombre, numero, tipo, titulo, capitulo, seccion, texto, url, "
+                "fecha_ultima_reforma, derogado, reformas FROM articles "
+                "WHERE ley = %s AND lower(numero) = lower(%s) ORDER BY tipo LIMIT 1",
+                (ley.upper(), numero.replace("_", " ")),
+            ).fetchone()
         if row is None:
             return None
-        cols = ("id", "ley", "ley_nombre", "numero", "tipo", "titulo", "capitulo", "texto",
-                "url", "fecha_ultima_reforma", "derogado")  # fmt: skip
+        cols = ("id", "ley", "ley_nombre", "numero", "tipo", "titulo", "capitulo", "seccion",
+                "texto", "url", "fecha_ultima_reforma", "derogado", "reformas")  # fmt: skip
         art = dict(zip(cols, row, strict=True))
-        art["fecha_ultima_reforma"] = str(art["fecha_ultima_reforma"])
+        fecha = art["fecha_ultima_reforma"]
+        art["fecha_ultima_reforma"] = fecha.isoformat() if fecha else None
         return art
+
+    def leyes(self) -> list[dict]:
+        """Leyes indexadas con su número de artículos vigentes y fecha de última reforma."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT ley, ley_nombre, "
+                "count(*) FILTER (WHERE tipo = 'articulo' AND NOT derogado), "
+                "max(fecha_ultima_reforma), max(url) FROM articles "
+                "GROUP BY ley, ley_nombre ORDER BY ley"
+            ).fetchall()
+        return [
+            {"clave": r[0], "nombre": r[1], "articulos": r[2],
+             "fecha_ultima_reforma": r[3].isoformat() if r[3] else None, "url": r[4]}
+            for r in rows
+        ]  # fmt: skip
+
+    def ping(self) -> bool:
+        """True si la base responde."""
+        try:
+            with self.pool.connection(timeout=2) as conn:
+                conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
 
 def formatear_articulo(art: dict) -> str:

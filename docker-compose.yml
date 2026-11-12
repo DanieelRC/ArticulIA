@@ -17,5 +17,27 @@ services:
       timeout: 3s
       retries: 10
 
+  api:
+    build: .
+    container_name: articulia-api
+    env_file: .env
+    environment:
+      # Dentro de la red de Compose la base se llama "db", no "localhost".
+      DATABASE_URL: postgresql://${POSTGRES_USER:-articulia}:${POSTGRES_PASSWORD:-articulia}@db:5432/${POSTGRES_DB:-articulia}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Reusa los modelos ya descargados en el host (~4.5 GB) en vez de bajarlos otra vez.
+      - ${HF_CACHE:-~/.cache/huggingface}:/models
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 volumes:
   pgdata:

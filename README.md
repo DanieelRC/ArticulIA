@@ -33,6 +33,59 @@ uv run python -m articulia.ingest.index
 
 Es idempotente: solo recalcula embeddings de artículos cuyo contenido cambió.
 
+## API
+
+Con la base indexada y una API key en `.env` (`GOOGLE_API_KEY` si `LLM_PROVIDER=gemini`):
+
+```bash
+docker compose up -d --build
+```
+
+O sin Docker para la API: `uv run uvicorn articulia.api.main:app --reload`.
+Documentación interactiva (OpenAPI) en http://localhost:8000/docs.
+
+| Método | Ruta | Qué hace |
+| --- | --- | --- |
+| `POST` | `/ask` | Responde una pregunta con citas verificadas |
+| `POST` | `/ask/stream` | Igual que `/ask`, pero emite cada paso del agente por SSE |
+| `GET` | `/laws` | Leyes del corpus, número de artículos y fecha de última reforma |
+| `GET` | `/articles/{ley}/{numero}` | Texto completo de un artículo (`/articles/LFT/61`) |
+| `GET` | `/health` | Estado del servicio y de la base (503 si la base no responde) |
+
+**`POST /ask`**
+
+```json
+{ "pregunta": "¿Cuántos días de vacaciones me tocan en mi primer año?", "leyes": ["LFT"] }
+```
+
+`pregunta` es obligatoria (3 a 1000 caracteres); `leyes` es opcional (`CPEUM`, `LFT`, `CCF`,
+`LFPDPPP`, `LFDA`, `LFPC`). Respuesta:
+
+```json
+{
+  "respuesta": "… [LFT, art. 76].",
+  "citas": [{ "id": "LFT-76", "ley": "LFT", "numero": "76",
+              "etiqueta": "[LFT, art. 76]", "url": "/articles/LFT/76" }],
+  "sin_evidencia": false
+}
+```
+
+Si no hay evidencia en el corpus, `sin_evidencia` es `true` y `citas` va vacía.
+
+**`POST /ask/stream`** (Server-Sent Events). Mismo cuerpo que `/ask`. Emite:
+
+- `event: paso` por cada nodo del agente: `{"nodo": "herramientas", "mensaje": "5 artículos recuperados", "articulos": ["LFT-76", …]}`
+- `event: respuesta` al final, con el mismo JSON que `/ask`
+- `event: error` si algo falla después de empezar el stream
+
+```bash
+curl -N -X POST localhost:8000/ask/stream -H "Content-Type: application/json" \
+  -d '{"pregunta": "¿Cuántas horas dura la jornada diurna?"}'
+```
+
+**Errores:** 422 si la entrada no es válida, 404 si el artículo no existe, 503 si falta la API key
+del LLM o la base no responde, 500 con un mensaje genérico (el detalle queda en los logs).
+
 ## Limitaciones
 
 No sustituye asesoría legal.
