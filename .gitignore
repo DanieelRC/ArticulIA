@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Entorno
+.env
+
+# Datos
+data/raw/*
+!data/raw/.gitkeep
+
+# Evaluación
+eval/results/*
+!eval/results/.gitkeep
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
