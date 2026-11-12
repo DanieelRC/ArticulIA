@@ -104,6 +104,18 @@ Abre http://localhost:5173; Vite redirige `/api` a `localhost:8000`. Pruebas: `n
   con su ubicación en la ley, historial de reformas y enlace al PDF oficial.
 - Filtro por ley; sin selección busca en todo el corpus.
 
+## Evaluación
+
+`eval/dataset.jsonl` tiene las preguntas (formato en [docs/decisiones.md](docs/decisiones.md)).
+
+```bash
+uv run python eval/run_eval.py --solo-recuperacion   # hit@5 y MRR, sin LLM
+uv run python eval/run_eval.py                       # completa, con agente y Ragas
+```
+
+Imprime una tabla Markdown y guarda el detalle por pregunta en `eval/results/`.
+Con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY` cada consulta queda trazada en LangSmith.
+
 ## Limitaciones
 
 No sustituye asesoría legal.

@@ -40,3 +40,22 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Devuelve la configuración cacheada."""
     return Settings()
+
+
+def configurar_trazas(settings: Settings | None = None) -> bool:
+    """Activa LangSmith si LANGSMITH_TRACING=true y hay API key.
+
+    LangChain lee las variables `LANGSMITH_*` de `os.environ`, pero pydantic-settings solo las
+    carga en `Settings` cuando vienen de `.env`; aquí se copian al entorno del proceso.
+    Devuelve True si las trazas quedaron activas.
+    """
+    import os
+
+    s = settings or get_settings()
+    key = s.langsmith_api_key.get_secret_value().strip() if s.langsmith_api_key else ""
+    activo = s.langsmith_tracing and bool(key)
+    os.environ["LANGSMITH_TRACING"] = "true" if activo else "false"
+    if activo:
+        os.environ["LANGSMITH_API_KEY"] = key
+        os.environ["LANGSMITH_PROJECT"] = s.langsmith_project
+    return activo

@@ -15,6 +15,9 @@ def build_graph(
     llm: BaseChatModel | None = None, corpus: Corpus | None = None
 ) -> CompiledStateGraph:
     """Arma y compila el grafo. Sin argumentos usa el LLM configurado y PostgreSQL."""
+    from articulia.config import configurar_trazas
+
+    configurar_trazas()
     if llm is None:
         from articulia.llm import get_llm
 

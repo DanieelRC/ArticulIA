@@ -270,3 +270,50 @@ npm 10.9 truena (`Cannot read properties of null (reading 'edgesOut')`) al resol
 vitest 5. `frontend/.npmrc` activa `legacy-peer-deps` y `@testing-library/dom` se declara
 explícitamente. Se usa vitest 5 porque la 3.x que npm elegía primero tiene avisos de seguridad
 críticos (tinypool, @vitest/mocker).
+
+## Fase 6. Evaluación y observabilidad
+
+### Formato del dataset (`eval/dataset.jsonl`)
+Una pregunta por línea; `cargar_dataset` valida cada una y que los artículos esperados existan en
+`data/processed`:
+
+```json
+{"id": "lft-vacaciones-1", "pregunta": "¿Cuántos días de vacaciones me tocan en mi primer año?", "tipo": "directa", "esperados": ["LFT-76"], "referencia": "…"}
+```
+
+- `tipo`: `directa`, `multiple` (dos o más artículos o leyes) o `sin_respuesta` (`esperados: []`).
+- `esperados`: ids como los de la base (`LFT-76`, `LFT-47_Bis`, `CPEUM-T-Primero`).
+- Líneas que empiezan con `//` son comentarios.
+
+### Qué mide cada métrica y con qué
+- **Hit@5, MRR, Recall@5**: sobre la búsqueda (`search`), sin LLM, solo en preguntas con
+  respuesta. Así se puede comparar con y sin reranker sin gastar llamadas.
+- **Citas válidas**: fracción de citas que apuntan a artículos que el agente recuperó en esa
+  consulta. Con el verificador debería ser 1.00; si no, hay un hueco en el verificador.
+- **Cita el artículo esperado**: si alguna cita de la respuesta es uno de los esperados.
+- **Abstención correcta / indebida**: en preguntas sin respuesta, cuántas se abstienen; en
+  preguntas con respuesta, cuántas se abstienen de más. Las dos juntas, porque abstenerse siempre
+  daría 1.00 en la primera.
+- **Fidelidad y relevancia (Ragas)**: el contexto de cada respuesta son los artículos que **cita**,
+  no todo lo recuperado: lo que se quiere saber es si lo citado respalda lo afirmado. Las citas
+  `[LFT, art. N]` se quitan del texto antes de evaluarlo. Los embeddings de Ragas son los mismos
+  bge-m3 locales.
+- **Latencia y tokens**: medidos por consulta en el script (`get_usage_metadata_callback`). Las
+  trazas detalladas y el costo quedan en LangSmith si `LANGSMITH_TRACING=true`.
+
+### Ragas 0.4.3 y langchain-community
+Ragas 0.4.3 (la última) importa `langchain_community.chat_models.vertexai`, que
+langchain-community quitó en la 0.4.2. Se fija `langchain-community>=0.4.1,<0.4.2` hasta que Ragas
+lo corrija. Ragas manda telemetría por defecto; el script pone `RAGAS_DO_NOT_TRACK=true`.
+
+### LangSmith por variables de entorno
+LangChain lee `LANGSMITH_*` de `os.environ`, pero pydantic-settings no exporta lo que lee de
+`.env`. `configurar_trazas()` copia la configuración al entorno al construir el grafo y solo
+activa trazas si hay API key (con `LANGSMITH_TRACING=true` y sin clave, LangChain llenaría el log
+de errores de red).
+
+### Primer hallazgo (antes de tener dataset)
+Con Gemini, "¿Cuántos días de vacaciones me tocan en mi primer año de trabajo?" a veces termina
+en abstención aunque el agente recuperó LFT 76. El generador argumenta que el 76 habla de "más de
+un año de servicios" y se abstiene, y el razonamiento gasta 4 de 5 iteraciones volviendo a buscar
+lo que ya tenía. Es candidato a la iteración de mejora; se medirá antes y después con el dataset.

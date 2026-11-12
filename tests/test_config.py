@@ -36,3 +36,22 @@ def test_api_key_vacia_da_error_claro(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "")
     with pytest.raises(RuntimeError, match="Falta la API key"):
         get_llm(Settings(_env_file=None))
+
+
+def test_langsmith_solo_se_activa_con_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    from articulia.config import configurar_trazas
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    assert configurar_trazas(Settings(_env_file=None)) is False
+    assert os.environ["LANGSMITH_TRACING"] == "false"
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")  # la llamada anterior lo apagó
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2-prueba")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "articulia-eval")
+    assert configurar_trazas(Settings(_env_file=None)) is True
+    assert os.environ["LANGSMITH_PROJECT"] == "articulia-eval"
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    configurar_trazas(Settings(_env_file=None))
