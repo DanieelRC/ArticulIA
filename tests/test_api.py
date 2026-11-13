@@ -156,6 +156,58 @@ def test_stream_emite_pasos_y_respuesta(client: TestClient) -> None:
     herramientas = next(d for t, d in eventos if t == "paso" and d["nodo"] == "herramientas")
     assert set(herramientas["articulos"]) == {"LFT-59", "LFT-61"}
     assert eventos[-1][1]["citas"][0]["id"] == "LFT-59"
+    # El texto llega en trozos antes de la respuesta final y, unido, es la respuesta.
+    tokens = [d["texto"] for t, d in eventos if t == "token"]
+    assert len(tokens) > 1
+    assert "".join(tokens) == eventos[-1][1]["respuesta"]
+    assert tipos.index("token") < tipos.index("respuesta")
+
+
+def test_stream_avisa_cuando_el_verificador_descarta_el_borrador() -> None:
+    corpus = ApiCorpus([LFT_59, LFT_61])
+    rechazo = Verificacion(respaldada=False, problemas=["El art. 59 no dice eso."])
+    llm = FakeLLM(
+        razonar=[
+            _tool_call("buscar_articulos", {"consulta": "jornada"}),
+            AIMessage("Listo"),
+            AIMessage("Listo"),
+        ],
+        respuestas=[RESPUESTA_OK, RESPUESTA_OK],
+        verificaciones=[rechazo, Verificacion(respaldada=True)],
+    )
+    app.dependency_overrides[get_graph] = lambda: build_graph(llm, corpus)
+    try:
+        with TestClient(app) as c:
+            r = c.post("/ask/stream", json={"pregunta": "¿Jornada máxima?"})
+    finally:
+        app.dependency_overrides.clear()
+    eventos = _eventos(r.text)
+    tipos = [t for t, _ in eventos]
+    assert tipos.count("borrador_descartado") == 1
+    descartado = tipos.index("borrador_descartado")
+    assert "token" in tipos[:descartado] and "token" in tipos[descartado:]
+    assert eventos[descartado][1]["problemas"] == ["El art. 59 no dice eso."]
+    assert tipos[-1] == "respuesta"
+
+
+def test_stream_no_transmite_tokens_de_una_abstencion() -> None:
+    corpus = ApiCorpus([])
+    llm = FakeLLM(
+        razonar=[AIMessage("Nada")],
+        respuestas=[
+            Respuesta(respuesta="El corpus no incluye leyes estatales.", sin_evidencia=True)
+        ],
+    )
+    app.dependency_overrides[get_graph] = lambda: build_graph(llm, corpus)
+    try:
+        with TestClient(app) as c:
+            r = c.post("/ask/stream", json={"pregunta": "¿Tenencia en la CDMX?"})
+    finally:
+        app.dependency_overrides.clear()
+    eventos = _eventos(r.text)
+    assert "token" not in [t for t, _ in eventos]
+    assert eventos[-1][1]["sin_evidencia"] is True
+    assert eventos[-1][1]["respuesta"] == "El corpus no incluye leyes estatales."
 
 
 def test_stream_convierte_errores_en_evento() -> None:

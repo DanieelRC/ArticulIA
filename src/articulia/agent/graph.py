@@ -69,9 +69,19 @@ def responder(
 def pasos(
     pregunta: str, leyes: list[str] | None = None, graph: CompiledStateGraph | None = None
 ) -> Iterator[tuple[str, dict]]:
-    """Itera (nodo, actualización) a medida que el agente avanza; útil para streaming (Fase 4)."""
+    """Itera el avance del agente para streaming.
+
+    Produce `(nodo, actualización)` al terminar cada nodo y `("token", {"texto": ...})` por cada
+    fragmento de la respuesta mientras el nodo `generar` la escribe.
+    """
     graph = graph or build_graph()
-    for chunk in graph.stream(
-        _inicial(pregunta, leyes), {"recursion_limit": _RECURSION_LIMIT}, stream_mode="updates"
+    for modo, chunk in graph.stream(
+        _inicial(pregunta, leyes),
+        {"recursion_limit": _RECURSION_LIMIT},
+        stream_mode=["updates", "custom"],
     ):
-        yield from chunk.items()
+        if modo == "custom":
+            if "token" in chunk:
+                yield "token", {"texto": chunk["token"]}
+        else:
+            yield from chunk.items()

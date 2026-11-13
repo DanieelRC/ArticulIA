@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from articulia.agent.state import Respuesta, Verificacion
 
@@ -73,6 +73,14 @@ class FakeLLM:
 
     def with_structured_output(self, schema: type) -> _Script:
         return self.estructurado[schema]
+
+    def stream(self, _mensajes: Any, *_: Any, **__: Any) -> Any:
+        """La generación es texto libre en trozos; la abstención va con su prefijo."""
+        resp: Respuesta = self.estructurado[Respuesta].invoke(None)
+        texto = f"SIN_EVIDENCIA: {resp.respuesta}" if resp.sin_evidencia else resp.respuesta
+        mitad = len(texto) // 2
+        for trozo in (texto[:5], texto[5:mitad], texto[mitad:]):
+            yield AIMessageChunk(trozo)
 
     def pendientes(self) -> int:
         return len(self.razonar.salidas) + sum(len(s.salidas) for s in self.estructurado.values())

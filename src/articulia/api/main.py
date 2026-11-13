@@ -164,11 +164,22 @@ def ask(req: AskRequest, graph: GraphDep) -> AskResponse:
 def ask_stream(req: AskRequest, graph: GraphDep) -> Iterator[ServerSentEvent]:
     """Igual que /ask, pero emite por SSE cada paso del agente y al final la respuesta.
 
-    Eventos: `paso` (uno por nodo), `respuesta` (final) o `error`.
+    Eventos: `paso` (uno por nodo), `token` (texto de la respuesta mientras se escribe),
+    `borrador_descartado` (el verificador rechazó lo escrito; hay que limpiar el texto),
+    `respuesta` (final, ya verificada) o `error`.
     """
     try:
         for nodo, update in pasos(req.pregunta, _leyes(req), graph=graph):
+            if nodo == "token":
+                yield ServerSentEvent(event="token", data=update)
+                continue
             yield ServerSentEvent(event="paso", data=describir_paso(nodo, update))
+            if nodo == "verificar" and update.get("respuesta") is None:
+                yield ServerSentEvent(
+                    event="borrador_descartado", data={"problemas": update.get("problemas", [])}
+                )
+            if nodo == "abstenerse":
+                yield ServerSentEvent(event="borrador_descartado", data={"problemas": []})
             if update.get("respuesta") is not None:
                 final = _respuesta_out(update["respuesta"])
                 yield ServerSentEvent(event="respuesta", data=final.model_dump())
