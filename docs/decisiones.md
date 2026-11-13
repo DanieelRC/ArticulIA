@@ -335,3 +335,87 @@ lenguaje cotidiano ("me tocan", "papá") y comparten pocas palabras con el texto
 texto completo mete ruido. Con `RRF_TEXT_WEIGHT=0.5` el artículo esperado llega al reranker en el
 90 % de las preguntas (antes 82 %). No se quitó el texto completo: sigue siendo lo que encuentra
 números de artículo y términos exactos.
+
+## Mejoras de experiencia, proceso y costos (después de la Fase 6)
+
+### Respuesta en vivo: texto libre en lugar de salida estructurada
+Para transmitir la respuesta palabra por palabra, `generar` dejó la salida estructurada (que llega
+entera al final) y pide texto libre con `llm.stream`. Lo que antes eran campos ahora se deriva en
+código: las citas se extraen del texto (`extraer_citas`, igual que antes) y la abstención se marca
+con el prefijo `SIN_EVIDENCIA:`. El contrato de `/ask` no cambió.
+- Los tokens salen por el canal `custom` de LangGraph (`get_stream_writer`), solo desde `generar`:
+  el razonamiento interno no se muestra.
+- Los primeros caracteres se retienen hasta saber si es una abstención; esa no se transmite a
+  medias, llega completa con su propio sello.
+- La respuesta se muestra **antes** de verificarse, marcada como "borrador sin cotejar". Si el
+  verificador la rechaza, la API emite `borrador_descartado` y la interfaz limpia el texto. Se
+  eligió mostrar el borrador porque la espera de 10 a 20 s en blanco era el peor defecto de uso;
+  el costo es que a veces se ve un texto que luego se retira, y por eso el estado es explícito.
+
+### Interfaz «Expediente sellado»
+Dirección visual, tokens y reglas en [DESIGN.md](../DESIGN.md); contexto de producto en
+[PRODUCT.md](../PRODUCT.md). Decisiones de ingeniería:
+- Dos vistas (`/` y `/consulta`) con History API, sin librería de rutas.
+- Historial en `localStorage` (`lib/archivo.ts`): nunca lanza, descarta lo más viejo si no cabe y
+  marca como detenidas las consultas que quedaron a medias. No hay cuentas: el archivo es del navegador.
+- Fuentes autoalojadas con `@fontsource-variable`: antes se cargaban de Google Fonts, lo que
+  enviaba la IP de cada visitante a un tercero y obligaba a abrir la CSP.
+- Las métricas de la portada viven en `src/data/metricas.ts` y se actualizan a mano tras cada
+  evaluación; las que no alcanzan la meta se muestran con ese dictamen.
+
+### Control de gasto (`articulia/api/limits.py`)
+Cada pregunta cuesta dinero en el proveedor del LLM (unos 0.017 USD con Grok). Antes de este
+cambio, cualquiera que alcanzara `/ask` podía gastar sin límite. Barreras, de la más barata a la
+más cara de evaluar:
+1. **Límite por IP** (5/min, 30/día): ventana deslizante en memoria. nginx aplica otro antes.
+2. **Caché de respuestas**: clave = pregunta normalizada (sin acentos, signos ni mayúsculas) +
+   leyes + modelo + huella del corpus. Una respuesta guardada no consume presupuesto ni cupo.
+3. **Tope diario** (`DAILY_BUDGET_USD`, 1 USD): el gasto real de cada consulta (tokens de entrada
+   y salida por los precios configurados) se suma en la tabla `usage_daily` de PostgreSQL, con un
+   `INSERT ... ON CONFLICT` atómico. Persiste entre reinicios. Al superarlo, 429.
+4. **Cupo de concurrencia** (2): el reranker en CPU no aguanta más; el resto recibe 503.
+5. **Topes por consulta**: `max_tokens` por llamada, `timeout`, un solo reintento y un máximo de
+   tokens por consulta que corta el grafo entre nodos.
+
+Detalles que importan:
+- Las comprobaciones corren en una dependencia de FastAPI, **antes** de abrir el stream; así el
+  cliente recibe un 429 o 503 real y no un evento de error dentro de un 200.
+- El gasto se registra en un `finally` del generador: si el cliente se desconecta a media
+  respuesta, lo consumido igual se cuenta y el cupo se libera.
+- El contador de tokens es un `UsageMetadataCallbackHandler` pasado al grafo. El atajo
+  `get_usage_metadata_callback` usa una variable de contexto y falla en streaming, porque el
+  generador se recorre desde distintos hilos del pool.
+- El tope diario puede excederse por el costo de las consultas que ya estaban en curso (como
+  máximo dos). Es una cota práctica, no contable; la barrera dura es el límite de gasto en la
+  consola del proveedor.
+
+### Otras correcciones de seguridad
+| Riesgo | Corrección |
+| --- | --- |
+| PostgreSQL publicado en `0.0.0.0:5432` con contraseña `articulia` | En desarrollo los puertos se atan a `127.0.0.1`; en producción no se publican y la contraseña es obligatoria |
+| `/docs` y `/openapi.json` públicos | Apagados con `ENVIRONMENT=production` |
+| API alcanzable directamente, saltándose nginx | En producción solo Caddy publica puertos |
+| IP del cliente falsificable con `X-Forwarded-For` | nginx sobrescribe el encabezado y solo confía en el de Caddy si viene de la red interna |
+| Contenedor de la API como root | Usuario sin privilegios |
+| Sin cabeceras de seguridad | CSP, `nosniff`, `X-Frame-Options`, `Referrer-Policy` en nginx; HSTS en Caddy |
+| Pregunta de hasta 1000 caracteres | 500, y cuerpo máximo de 8 kB en nginx |
+
+No se agregó autenticación ni CAPTCHA: para una demo de portafolio añaden fricción al
+reclutador, y el tope diario ya acota el peor caso a 30 USD al mes.
+
+### Agente más barato
+Observado con Grok: el nodo de razonamiento redactaba la respuesta completa (que se descartaba,
+porque la escribe `generar`) y repetía búsquedas hasta agotar las 5 iteraciones. Cambios:
+- El prompt pide responder solo `LISTO` cuando ya hay material, y una o dos búsquedas.
+- Una llamada a herramienta idéntica a otra de la misma consulta no se ejecuta: el modelo recibe
+  "ya hiciste esta consulta".
+- Caché LRU de búsquedas en proceso (512 entradas): la misma búsqueda no paga otro embedding ni
+  otro reranking.
+- `generar` responde con lo que el artículo sí establece y se abstiene solo si ningún artículo
+  trata el tema (antes se abstenía con LFT 76 en la mano porque dice "más de un año").
+- La API precarga los modelos al arrancar (`WARMUP_MODELS`), así la primera pregunta no espera.
+
+### Evaluación reanudable
+`run_eval.py` escribe cada pregunta en `eval/results/_progreso-*.jsonl` al terminarla;
+`--reanudar` continúa donde se quedó. Una corrida completa se perdió al cerrarse la sesión; con
+esto ya no se paga dos veces.
