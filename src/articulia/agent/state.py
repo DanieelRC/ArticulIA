@@ -9,6 +9,8 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 MAX_ITERACIONES = 5
+# Rondas de búsqueda tras las cuales, si ya hay artículos, se redacta con lo que se tiene.
+MAX_RONDAS_BUSQUEDA = 3
 MAX_REINTENTOS_VERIFICACION = 1
 
 # "[LFT, art. 61]", "[LFT, art. 47 Bis]", "[LFT, art. 39-A]", "[CPEUM, transitorio Primero]"
@@ -83,4 +85,5 @@ class AgentState(TypedDict, total=False):
     problemas: Annotated[list[str], add]  # historial de fallos del verificador
     iteraciones: int  # vueltas por el nodo de razonamiento
     reintentos: int  # veces que el verificador mandó de regreso
+    faltan_articulos: bool  # el último fallo fue por una cita a un artículo no recuperado
     respuesta: Respuesta | None  # salida final

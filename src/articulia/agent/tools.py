@@ -116,6 +116,28 @@ class PostgresCorpus:
             return False
 
 
+MAX_CHARS_ARTICULO = 2500
+
+
+def texto_para_llm(art: dict, limite: int = MAX_CHARS_ARTICULO) -> tuple[str, bool]:
+    """Texto del artículo que se envía al modelo y si quedó recortado.
+
+    Hay artículos de decenas de miles de caracteres (CPEUM 123, LFT 513). Mandarlos completos
+    multiplica el costo de cada llamada, así que de los largos solo va el fragmento que la
+    búsqueda encontró más parecido a la consulta, o el inicio si no hay fragmento. La interfaz
+    sigue mostrando el artículo completo; esto solo acota lo que lee el LLM.
+    """
+    texto = art.get("texto", "").replace("</articulo>", "")
+    if len(texto) <= limite:
+        return texto, False
+    fragmento = (art.get("fragmento") or "").replace("</articulo>", "")
+    if fragmento:
+        # El fragmento indexado empieza con una línea de contexto (ley, artículo, capítulo).
+        cuerpo = fragmento.split("\n", 1)[-1]
+        return f"[…]\n{cuerpo[:limite]}\n[…]", True
+    return f"{texto[:limite]}\n[…]", True
+
+
 def formatear_articulo(art: dict) -> str:
     """Representa un artículo como DATOS delimitados, nunca como instrucciones.
 
@@ -126,10 +148,11 @@ def formatear_articulo(art: dict) -> str:
     tipo = "transitorio" if art.get("tipo") == "transitorio" else "art."
     cita = f"[{art['ley']}, {tipo} {art['numero']}]"
     ubicacion = " · ".join(x for x in (art.get("titulo"), art.get("capitulo")) if x)
-    texto = art.get("texto", "").replace("</articulo>", "")
+    texto, recortado = texto_para_llm(art)
+    aviso = ' recortado="si"' if recortado else ""
     return (
         f'<articulo id="{art["id"]}" cita="{cita}" ley="{art.get("ley_nombre", art["ley"])}"'
-        f' ubicacion="{ubicacion}">\n{texto}\n</articulo>'
+        f' ubicacion="{ubicacion}"{aviso}>\n{texto}\n</articulo>'
     )
 
 

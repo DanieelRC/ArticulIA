@@ -43,7 +43,7 @@ def build_graph(
     g.add_conditional_edges(
         "verificar",
         ruta_tras_verificar,
-        {"fin": END, "razonar": "razonar", "abstenerse": "abstenerse"},
+        {"fin": END, "razonar": "razonar", "generar": "generar", "abstenerse": "abstenerse"},
     )
     g.add_edge("abstenerse", END)
     return g.compile()

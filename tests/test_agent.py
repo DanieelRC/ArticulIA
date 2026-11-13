@@ -96,16 +96,6 @@ def test_abstencion_cuando_el_modelo_no_encuentra_evidencia() -> None:
     assert llm.pendientes() == 0
 
 
-def test_limite_de_iteraciones() -> None:
-    # El modelo pide herramientas sin parar: al llegar a 5 vueltas se abstiene.
-    llm = FakeLLM(
-        razonar=[_tool_call("buscar_articulos", {"consulta": f"q{i}"}, f"c{i}") for i in range(5)]
-    )
-    resp = responder(PREGUNTA, graph=build_graph(llm, FakeCorpus([LFT_59])))
-    assert resp.sin_evidencia
-    assert llm.pendientes() == 0
-
-
 def test_error_de_herramienta_vuelve_al_modelo() -> None:
     llm = FakeLLM(
         razonar=[
@@ -185,3 +175,29 @@ def test_no_repite_una_busqueda_identica() -> None:
     repetida = [u for n, u in actualizaciones if n == "herramientas"][1]
     assert "Ya hiciste esta misma consulta" in repetida["messages"][0].content
     assert actualizaciones[-1][1]["respuesta"].citas
+
+
+def test_fallo_de_redaccion_se_reescribe_sin_volver_a_buscar() -> None:
+    # Los artículos citados sí se recuperaron; el verificador rechaza una afirmación. El
+    # reintento va directo a generar: no hay más vueltas de razonamiento ni búsquedas.
+    llm = FakeLLM(
+        razonar=[_tool_call("buscar_articulos", {"consulta": "jornada"}), AIMessage("LISTO")],
+        respuestas=[BUENA, BUENA],
+        verificaciones=[
+            Verificacion(respaldada=False, problemas=["El art. 61 no dice eso."]),
+            Verificacion(respaldada=True),
+        ],
+    )
+    corpus = FakeCorpus([LFT_59, LFT_61])
+    nodos = [n for n, _ in pasos(PREGUNTA, graph=build_graph(llm, corpus)) if n != "token"]
+    assert nodos == [
+        "razonar",
+        "herramientas",
+        "razonar",
+        "generar",
+        "verificar",
+        "generar",
+        "verificar",
+    ]
+    assert len(corpus.llamadas) == 1
+    assert llm.pendientes() == 0

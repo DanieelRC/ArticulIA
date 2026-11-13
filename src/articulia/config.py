@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     xai_api_key: SecretStr | None = None
 
     # Base de datos
-    database_url: str = "postgresql://articulia:articulia@localhost:5432/articulia"
+    database_url: str = "postgresql://articulia:articulia@127.0.0.1:5432/articulia"
 
     # Recuperación
     embedding_model: str = "BAAI/bge-m3"
