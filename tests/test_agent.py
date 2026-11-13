@@ -166,3 +166,22 @@ def test_run_tool_valida_argumentos() -> None:
         run_tool(FakeCorpus([]), "borrar_todo", {})
     with pytest.raises(Exception, match="leyes"):
         run_tool(FakeCorpus([]), "comparar", {"tema": "x", "leyes": ["LFT"]})  # mínimo dos
+
+
+def test_no_repite_una_busqueda_identica() -> None:
+    # El modelo pide dos veces la misma búsqueda: la segunda no llega al corpus.
+    llm = FakeLLM(
+        razonar=[
+            _tool_call("buscar_articulos", {"consulta": "jornada máxima"}),
+            _tool_call("buscar_articulos", {"consulta": "Jornada Máxima"}, "c2"),
+            AIMessage("LISTO"),
+        ],
+        respuestas=[BUENA],
+        verificaciones=[Verificacion(respaldada=True)],
+    )
+    corpus = FakeCorpus([LFT_59, LFT_61])
+    actualizaciones = list(pasos(PREGUNTA, graph=build_graph(llm, corpus)))
+    assert len(corpus.llamadas) == 1
+    repetida = [u for n, u in actualizaciones if n == "herramientas"][1]
+    assert "Ya hiciste esta misma consulta" in repetida["messages"][0].content
+    assert actualizaciones[-1][1]["respuesta"].citas

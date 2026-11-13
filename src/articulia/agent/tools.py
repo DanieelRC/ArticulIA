@@ -5,6 +5,8 @@ Las funciones reciben un `Corpus` para poder probarse sin base de datos. El agen
 """
 
 import re
+import threading
+from collections import OrderedDict
 from typing import Protocol
 
 from langchain_core.tools import StructuredTool
@@ -32,6 +34,8 @@ class PostgresCorpus:
     psycopg no debe compartirse entre consultas simultáneas.
     """
 
+    MAX_BUSQUEDAS = 512
+
     def __init__(self, max_size: int = 4) -> None:
         from pgvector.psycopg import register_vector
         from psycopg_pool import ConnectionPool
@@ -46,13 +50,27 @@ class PostgresCorpus:
             configure=register_vector,
             open=True,
         )
+        self._busquedas: OrderedDict[tuple, list[dict]] = OrderedDict()
+        self._lock = threading.Lock()
 
     def buscar(self, consulta: str, leyes: list[str] | None, top_k: int) -> list[dict]:
         """Ver `articulia.retrieval.rerank.search`."""
         from articulia.retrieval.rerank import search
 
+        # Caché en proceso: el agente y distintos usuarios repiten búsquedas, y cada una cuesta
+        # un embedding y un reranking. El corpus no cambia mientras el proceso vive.
+        clave = (" ".join(consulta.lower().split()), tuple(sorted(leyes or [])), top_k)
+        with self._lock:
+            if clave in self._busquedas:
+                self._busquedas.move_to_end(clave)
+                return [dict(r) for r in self._busquedas[clave]]
         with self.pool.connection() as conn:
-            return [r.model_dump(mode="json") for r in search(conn, consulta, leyes, top_k)]
+            resultado = [r.model_dump(mode="json") for r in search(conn, consulta, leyes, top_k)]
+        with self._lock:
+            self._busquedas[clave] = resultado
+            while len(self._busquedas) > self.MAX_BUSQUEDAS:
+                self._busquedas.popitem(last=False)
+        return [dict(r) for r in resultado]
 
     def obtener(self, ley: str, numero: str) -> dict | None:
         """Busca por ley y número ('5o', '123 bis', '39-a'); permanentes antes que transitorios."""

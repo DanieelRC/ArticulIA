@@ -1,0 +1,50 @@
+# Producción (VPS). Se usa encima del archivo base:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Diferencias con desarrollo:
+# - Solo Caddy publica puertos (80 y 443, con HTTPS automático). Ni la base ni la API ni nginx
+#   son alcanzables desde internet.
+# - La contraseña de la base es obligatoria: sin POSTGRES_PASSWORD, Compose se niega a arrancar.
+# - ENVIRONMENT=production apaga /docs y hace obligatoria la base para llevar el gasto.
+services:
+  db:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env (no uses la de ejemplo)}
+    restart: unless-stopped
+
+  api:
+    ports: !reset []
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-articulia}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@db:5432/${POSTGRES_DB:-articulia}
+      WARMUP_MODELS: "true"
+      LANGSMITH_TRACING: "false"
+    volumes: !override
+      - hf_models:/models
+    restart: unless-stopped
+
+  web:
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: articulia-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO:?Define DOMINIO en .env, por ejemplo articulia.tudominio.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  hf_models:
+  caddy_data:
+  caddy_config:

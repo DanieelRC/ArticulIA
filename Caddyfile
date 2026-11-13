@@ -1,0 +1,15 @@
+# HTTPS automático con Let's Encrypt. El dominio viene de la variable DOMINIO.
+{$DOMINIO} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# nginx (servicio web) sirve la interfaz y aplica los límites por IP antes de la API.
+	reverse_proxy web:80 {
+		# Sin esto Caddy juntaría los eventos SSE y la respuesta no se vería en vivo.
+		flush_interval -1
+	}
+}

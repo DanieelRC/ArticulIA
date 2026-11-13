@@ -5,6 +5,7 @@ Uso:
     uv run python eval/run_eval.py --solo-recuperacion   # sin LLM: hit@5 y MRR
     uv run python eval/run_eval.py --solo-recuperacion --sin-reranker
     uv run python eval/run_eval.py --limite 10 --umbral-hit5 0.8   # evaluación rápida para CI
+    uv run python eval/run_eval.py --reanudar                      # continuar una corrida cortada
 
 Imprime una tabla Markdown lista para el README y guarda resultados en eval/results/.
 """
@@ -80,15 +81,28 @@ def evaluar_recuperacion(preguntas: list[Pregunta], usar_reranker: bool) -> tupl
 # --- Agente --------------------------------------------------------------------------------------
 
 
-def correr_agente(preguntas: list[Pregunta]) -> list[dict]:
-    """Corre el agente completo y registra respuesta, recuperados, citas, latencia y tokens."""
+def correr_agente(preguntas: list[Pregunta], progreso: Path | None = None) -> list[dict]:
+    """Corre el agente completo y registra respuesta, recuperados, citas, latencia y tokens.
+
+    Con `progreso`, cada pregunta se escribe en ese JSONL al terminar y las que ya están ahí no
+    se vuelven a correr: una evaluación interrumpida se reanuda sin pagarla dos veces.
+    """
     from langchain_core.callbacks import get_usage_metadata_callback
 
     from articulia.agent.graph import _RECURSION_LIMIT, _inicial, build_graph
 
+    hechas: dict[str, dict] = {}
+    if progreso is not None and progreso.exists():
+        with open(progreso, encoding="utf-8") as f:
+            hechas = {d["id"]: d for d in map(json.loads, filter(str.strip, f))}
+        print(f"Reanudando: {len(hechas)} preguntas ya evaluadas", file=sys.stderr)
+
     graph = build_graph()
     salidas = []
     for i, p in enumerate(preguntas, start=1):
+        if p.id in hechas and not hechas[p.id].get("error"):
+            salidas.append(hechas[p.id])
+            continue
         print(f"[{i}/{len(preguntas)}] {p.id}", file=sys.stderr)
         t0 = time.perf_counter()
         with get_usage_metadata_callback() as uso:
@@ -102,25 +116,29 @@ def correr_agente(preguntas: list[Pregunta]) -> list[dict]:
         segundos = time.perf_counter() - t0
         resp = final.get("respuesta")
         articulos = final.get("articulos", {})
-        tokens = sum(u.get("total_tokens", 0) for u in uso.usage_metadata.values())
-        salidas.append(
-            {
-                "id": p.id,
-                "tipo": p.tipo,
-                "pregunta": p.pregunta,
-                "esperados": p.esperados,
-                "referencia": p.referencia,
-                "respuesta": resp.respuesta if resp else None,
-                "sin_evidencia": resp.sin_evidencia if resp else None,
-                "citados": [c.article_id for c in resp.citas] if resp else [],
-                "recuperados": list(articulos),
-                "textos": {k: v["texto"] for k, v in articulos.items()},
-                "segundos": segundos,
-                "tokens": tokens,
-                "iteraciones": final.get("iteraciones"),
-                "error": error,
-            }
-        )
+        usos = uso.usage_metadata.values()
+        salida = {
+            "id": p.id,
+            "tipo": p.tipo,
+            "pregunta": p.pregunta,
+            "esperados": p.esperados,
+            "referencia": p.referencia,
+            "respuesta": resp.respuesta if resp else None,
+            "sin_evidencia": resp.sin_evidencia if resp else None,
+            "citados": [c.article_id for c in resp.citas] if resp else [],
+            "recuperados": list(articulos),
+            "textos": {k: v["texto"] for k, v in articulos.items()},
+            "segundos": segundos,
+            "tokens": sum(u.get("total_tokens", 0) for u in usos),
+            "tokens_entrada": sum(u.get("input_tokens", 0) for u in usos),
+            "tokens_salida": sum(u.get("output_tokens", 0) for u in usos),
+            "iteraciones": final.get("iteraciones"),
+            "error": error,
+        }
+        salidas.append(salida)
+        if progreso is not None:
+            with open(progreso, "a", encoding="utf-8") as f:
+                f.write(json.dumps(salida, ensure_ascii=False) + "\n")
     return salidas
 
 
@@ -154,6 +172,10 @@ def metricas_agente(salidas: list[dict]) -> list[Fila]:
         Fila(metrica="Latencia p50", valor=percentil(lat, 50), formato="segundos"),
         Fila(metrica="Latencia p95", valor=percentil(lat, 95), formato="segundos"),
         Fila(metrica="Tokens por consulta (media)", valor=media(tok), formato="entero"),
+        Fila(
+            metrica="Iteraciones por consulta (media)",
+            valor=media([s.get("iteraciones") for s in salidas]),
+        ),
         Fila(
             metrica="Errores",
             valor=float(sum(1 for s in salidas if s["error"])),
@@ -249,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sin-ragas", action="store_true", help="Omitir fidelidad y relevancia.")
     ap.add_argument("--umbral-hit5", type=float, help="Falla (código 1) si hit@5 es menor.")
     ap.add_argument("--etiqueta", default="", help="Nombre corto de la corrida.")
+    ap.add_argument(
+        "--reanudar", action="store_true", help="Continuar una corrida interrumpida del agente."
+    )
     args = ap.parse_args(argv)
 
     preguntas = cargar_dataset(args.dataset, ids_del_corpus(RAIZ / "data" / "processed"))
@@ -265,7 +290,11 @@ def main(argv: list[str] | None = None) -> int:
     filas, detalle_rec = evaluar_recuperacion(preguntas, usar_reranker)
     salidas: list[dict] = []
     if not args.solo_recuperacion:
-        salidas = correr_agente(preguntas)
+        args.salida.mkdir(parents=True, exist_ok=True)
+        progreso = args.salida / f"_progreso-{args.etiqueta or 'agente'}.jsonl"
+        if not args.reanudar and progreso.exists():
+            progreso.unlink()
+        salidas = correr_agente(preguntas, progreso)
         filas += metricas_agente(salidas)
         if not args.sin_ragas:
             filas += metricas_ragas(salidas)

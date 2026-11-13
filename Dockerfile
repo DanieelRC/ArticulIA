@@ -19,4 +19,10 @@ COPY src ./src
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
-CMD ["uvicorn", "articulia.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Proceso sin privilegios: si algo se compromete, no es root dentro del contenedor.
+RUN useradd --create-home --uid 10001 app && mkdir -p /models && chown app /models
+USER app
+
+# --proxy-headers: la IP del cliente llega en X-Forwarded-For desde nginx, que la sobrescribe.
+# La API no se publica a internet; solo nginx, dentro de la red de Compose, puede alcanzarla.
+CMD ["uvicorn", "articulia.api.main:app", "--host", "0.0.0.0", "--port", "8000",      "--proxy-headers", "--forwarded-allow-ips", "*"]

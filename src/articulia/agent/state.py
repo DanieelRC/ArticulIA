@@ -78,6 +78,7 @@ class AgentState(TypedDict, total=False):
     leyes: list[str] | None  # filtro opcional por ley
     messages: Annotated[list[AnyMessage], add_messages]
     articulos: Annotated[dict[str, dict], _merge_articulos]  # id -> artículo recuperado
+    consultas: Annotated[list[str], add]  # firmas de llamadas a herramientas ya hechas
     borrador: Respuesta | None
     problemas: Annotated[list[str], add]  # historial de fallos del verificador
     iteraciones: int  # vueltas por el nodo de razonamiento

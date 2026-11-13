@@ -1,3 +1,5 @@
+# Desarrollo local. Los puertos se atan a 127.0.0.1: nada queda expuesto a la red.
+# Para el servidor público usa además docker-compose.prod.yml (ver docs/DESPLIEGUE.md).
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -7,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-articulia}
       POSTGRES_DB: ${POSTGRES_DB:-articulia}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./src/articulia/db/init:/docker-entrypoint-initdb.d:ro
@@ -24,10 +26,11 @@ services:
     environment:
       # Dentro de la red de Compose la base se llama "db", no "localhost".
       DATABASE_URL: postgresql://${POSTGRES_USER:-articulia}:${POSTGRES_PASSWORD:-articulia}@db:5432/${POSTGRES_DB:-articulia}
+      WARMUP_MODELS: "true"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      # Reusa los modelos ya descargados en el host (~4.5 GB) en vez de bajarlos otra vez.
+      # Reusa los modelos ya descargados en el host en vez de bajarlos otra vez.
       - ${HF_CACHE:-~/.cache/huggingface}:/models
     depends_on:
       db:
@@ -43,7 +46,7 @@ services:
     build: ./frontend
     container_name: articulia-web
     ports:
-      - "${WEB_PORT:-3000}:80"
+      - "127.0.0.1:${WEB_PORT:-3000}:80"
     depends_on:
       - api
 
