@@ -169,6 +169,48 @@ uv run python eval/bench_reranker.py                 # comparar rerankers
 Imprime una tabla Markdown y guarda el detalle por pregunta en `eval/results/`.
 Con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY` cada consulta queda trazada en LangSmith.
 
+## Servidor MCP
+
+ArticulIA también funciona como servidor [MCP](https://modelcontextprotocol.io) por stdio, para
+usarlo desde Claude Desktop, Claude Code u otro cliente. Expone tres herramientas:
+
+| Herramienta | Qué hace | Costo |
+| --- | --- | --- |
+| `buscar_articulos(consulta, ley?)` | Los 5 artículos más relevantes, con su cita lista | Sin LLM |
+| `obtener_articulo(ley, numero)` | Texto vigente y completo de un artículo | Sin LLM |
+| `preguntar(pregunta, leyes?)` | El agente completo: busca, redacta con citas y las coteja | Usa el LLM configurado |
+
+Requisitos: la base levantada e indexada (`docker compose up -d db`) y, solo para `preguntar`,
+la API key del LLM en `.env`.
+
+**Claude Desktop.** Edita `claude_desktop_config.json` (en Windows está en
+`%APPDATA%\Claude\`; en macOS, en `~/Library/Application Support/Claude/`) y reinicia la app:
+
+```json
+{
+  "mcpServers": {
+    "articulia": {
+      "command": "uv",
+      "args": ["--directory", "C:\ruta\a\ArticulIA", "run", "articulia-mcp"]
+    }
+  }
+}
+```
+
+`--directory` hace que el servidor arranque en la carpeta del proyecto, donde lee `.env`. Si
+Claude Desktop no encuentra `uv`, pon su ruta completa en `command` (`where uv` en Windows,
+`which uv` en macOS o Linux).
+
+**Claude Code:**
+
+```bash
+claude mcp add articulia -- uv --directory /ruta/a/ArticulIA run articulia-mcp
+```
+
+La primera búsqueda tarda unos 40 segundos porque carga los modelos de embeddings y reranking;
+las siguientes, unos 5. `preguntar` comparte con la API el tope de gasto diario y la caché de
+respuestas.
+
 ## Integración continua
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en GitHub Actions:

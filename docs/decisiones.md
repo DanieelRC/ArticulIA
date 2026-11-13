@@ -538,3 +538,42 @@ requests desde forks no reciben secretos, así que nadie externo puede gastar el
 - `concurrency` cancela la corrida anterior de la misma rama.
 - La tabla de resultados se escribe en el resumen del job (`GITHUB_STEP_SUMMARY`) y el detalle
   por pregunta se sube como artefacto.
+
+## Fase 8. Servidor MCP
+
+### Qué expone y cómo se reutiliza el paquete
+`articulia/mcp_server.py` usa el SDK oficial (`mcp` 2.x, clase `MCPServer`; en la 1.x se llamaba
+`FastMCP`) con transporte stdio. Las tres herramientas llaman al mismo `Corpus`, al mismo grafo y
+al mismo control de gasto que la API: no hay una segunda implementación de la búsqueda ni del agente.
+- `buscar_articulos` y `obtener_articulo` no usan LLM. Un cliente como Claude puede leer la ley
+  con ellas y redactar por su cuenta, sin gastar la API key de ArticulIA.
+- `preguntar` corre el agente completo, con verificación de citas. Pasa por `Guardia`: comparte
+  el tope diario, la caché y el registro de gasto con la API. Sin eso, el servidor MCP sería una
+  puerta para gastar sin límite.
+
+### Decisiones
+- **Lógica síncrona, herramientas asíncronas.** `buscar`, `obtener` y `responder_pregunta` son
+  funciones normales, fáciles de probar. Las herramientas MCP las ejecutan en un hilo
+  (`anyio.to_thread`) para que el servidor siga atendiendo el protocolo durante una búsqueda de
+  varios segundos.
+- **Nada a la salida estándar.** En stdio, stdout es el canal del protocolo. Los registros van a
+  stderr y las barras de progreso de Hugging Face se apagan.
+- **Errores para quien lee, no para quien depura.** Ley desconocida (con la lista de claves
+  válidas), artículo inexistente, consulta vacía o demasiado larga, y base caída (con el comando
+  para levantarla). El detalle técnico queda en stderr.
+- **Texto acotado.** Los resultados de búsqueda usan el mismo recorte que el agente (2,500
+  caracteres) y `obtener_articulo` devuelve hasta 20,000 con `recortado: true`: el artículo 513
+  de la LFT mide 288 mil y llenaría el contexto del cliente.
+- **Instrucciones del servidor.** Le piden al cliente citar con el formato de las herramientas y
+  no completar con conocimiento propio cuando no hay fundamento.
+- **Dependencias inyectables** (`configurar`): las pruebas usan un cliente MCP en memoria contra
+  el servidor real, con el corpus y el LLM simulados.
+
+### Verificación
+- 14 pruebas con cliente MCP en memoria (`tests/test_mcp_server.py`).
+- Prueba por stdio contra la base real, lanzando `uv run articulia-mcp` como subproceso:
+  `buscar_articulos("prima por trabajar en domingo", "LFT")` devolvió LFT 71 primero;
+  `obtener_articulo("CPEUM", "5o")` trajo el artículo 5; LFT 513 llegó recortado.
+- `preguntar` no se probó con el LLM real en esta fase para no gastar la API key; sí con el LLM
+  simulado, incluida la caché y el tope de gasto.
+- Falta la prueba manual en Claude Desktop, que es el criterio de terminado de la guía.

@@ -47,6 +47,7 @@ class PostgresCorpus:
             min_size=1,
             max_size=max_size,
             kwargs={"autocommit": True},
+            timeout=10,  # si la base no responde, fallar pronto con un error claro
             configure=register_vector,
             open=True,
         )
