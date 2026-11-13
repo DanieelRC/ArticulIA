@@ -83,6 +83,10 @@ export const getArticle = (ley: string, numero: string, signal?: AbortSignal) =>
 
 export interface StreamHandlers {
   onPaso: (paso: Paso) => void
+  /** Fragmento de la respuesta mientras el modelo la escribe. */
+  onToken: (texto: string) => void
+  /** El verificador rechazó lo escrito: hay que limpiar el texto parcial. */
+  onDescartado: (problemas: string[]) => void
   onRespuesta: (respuesta: AskResponse) => void
 }
 
@@ -109,11 +113,15 @@ export async function askStream(
     if (done) break
     for (const ev of parser.push(value)) {
       const data = JSON.parse(ev.data)
-      if (ev.event === 'paso') handlers.onPaso(data as Paso)
+      if (ev.event === 'token') handlers.onToken(data.texto as string)
+      else if (ev.event === 'paso') handlers.onPaso(data as Paso)
+      else if (ev.event === 'borrador_descartado')
+        handlers.onDescartado((data.problemas ?? []) as string[])
       else if (ev.event === 'respuesta') {
         handlers.onRespuesta(data as AskResponse)
         terminado = true
-      } else if (ev.event === 'error') throw new ApiError(500, data.detail ?? 'Error del agente')
+      } else if (ev.event === 'error')
+        throw new ApiError(data.status ?? 500, data.detail ?? 'Error del agente')
     }
   }
   if (!terminado) throw new ApiError(500, 'La conexión se cerró antes de terminar la respuesta.')

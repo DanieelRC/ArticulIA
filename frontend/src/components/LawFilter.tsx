@@ -7,16 +7,16 @@ interface Props {
   disabled?: boolean
 }
 
-/** Filtro por ley: sin selección se busca en todo el corpus. */
+/** Casillas del formato: sin selección se consulta todo el corpus. */
 export function LawFilter({ laws, selected, onChange, disabled }: Props) {
   const toggle = (clave: string) =>
     onChange(selected.includes(clave) ? selected.filter((c) => c !== clave) : [...selected, clave])
 
   return (
-    <div className="law-filter" role="group" aria-label="Filtrar por ley">
+    <div className="casillas" role="group" aria-label="Leyes a consultar">
       <button
         type="button"
-        className="chip"
+        className="casilla"
         aria-pressed={selected.length === 0}
         onClick={() => onChange([])}
         disabled={disabled}
@@ -27,10 +27,10 @@ export function LawFilter({ laws, selected, onChange, disabled }: Props) {
         <button
           key={law.clave}
           type="button"
-          className="chip"
+          className="casilla"
           aria-pressed={selected.includes(law.clave)}
           onClick={() => toggle(law.clave)}
-          title={`${law.nombre} · ${law.articulos} artículos`}
+          title={`${law.nombre} · ${law.articulos.toLocaleString('es-MX')} artículos`}
           disabled={disabled}
         >
           {law.clave}

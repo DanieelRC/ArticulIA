@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { type Article, getArticle } from '../lib/api'
 import { type CitaRef, suavizar, toParagraphs } from '../lib/citations'
+import { Icono, Sello } from './ui'
 
 interface Props {
   cita: CitaRef
   onClose: () => void
+  /** Navegar al artículo vecino dentro de la misma ley. */
+  onIr: (cita: CitaRef) => void
 }
 
 type Estado =
@@ -21,13 +24,14 @@ const fecha = (iso: string | null) =>
       })
     : null
 
-/** Panel lateral con el texto completo del artículo citado. */
-export function ArticlePanel({ cita, onClose }: Props) {
+/** Copia del artículo citado: texto completo, ubicación, reformas y fuente oficial. */
+export function ArticlePanel({ cita, onClose, onIr }: Props) {
   const [estado, setEstado] = useState<Estado>({ tipo: 'cargando' })
+  const [copiado, setCopiado] = useState(false)
   const cerrarRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    // App monta un panel nuevo por cita (key), así que el estado inicial ya es "cargando".
+    // El padre monta un panel nuevo por cita (key), así que el estado inicial ya es «cargando».
     const ctrl = new AbortController()
     getArticle(cita.ley, cita.numero, ctrl.signal)
       .then((articulo) => setEstado({ tipo: 'listo', articulo }))
@@ -45,36 +49,61 @@ export function ArticlePanel({ cita, onClose }: Props) {
   }, [cita, onClose])
 
   const art = estado.tipo === 'listo' ? estado.articulo : null
-  const titulo = cita.transitorio ? `Transitorio ${cita.numero}` : `Artículo ${cita.numero}`
+  const rotulo = cita.transitorio ? 'Transitorio' : 'Artículo'
+  const n = /^\d+$/.test(cita.numero) && !cita.transitorio ? Number(cita.numero) : null
+  const vecino = (d: number): CitaRef => ({
+    ley: cita.ley,
+    numero: String((n ?? 0) + d),
+    transitorio: false,
+    etiqueta: `[${cita.ley}, art. ${(n ?? 0) + d}]`,
+  })
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(cita.etiqueta)
+      setCopiado(true)
+      setTimeout(() => setCopiado(false), 1800)
+    } catch {
+      /* sin permiso de portapapeles */
+    }
+  }
 
   return (
-    <aside className="panel" aria-label={`${cita.ley}, ${titulo}`}>
-      <header className="panel-head">
-        <div>
-          <p className="panel-law">{art?.ley_nombre ?? cita.ley}</p>
-          <h2 className="panel-title">{titulo}</h2>
+    <aside className="copia" aria-label={`${cita.ley}, ${rotulo} ${cita.numero}`}>
+      <header className="copia-cabeza">
+        <div className="copia-id">
+          <p className="copia-ley">{art?.ley_nombre ?? cita.ley}</p>
+          <h2 className="copia-num">
+            <span>{rotulo}</span> {cita.numero}
+          </h2>
           {art && (art.titulo || art.capitulo) && (
-            <p className="panel-where">
+            <p className="copia-donde">
               {suavizar([art.titulo, art.capitulo, art.seccion].filter(Boolean).join(' · '))}
             </p>
           )}
         </div>
-        <button ref={cerrarRef} type="button" className="panel-close" onClick={onClose} aria-label="Cerrar artículo">
-          ×
+        <button
+          ref={cerrarRef}
+          type="button"
+          className="btn-icono"
+          onClick={onClose}
+          aria-label="Cerrar artículo"
+        >
+          <Icono n="cerrar" size={20} />
         </button>
       </header>
 
-      <div className="panel-body">
-        {estado.tipo === 'cargando' && <p className="panel-status">Cargando artículo…</p>}
+      <div className="copia-cuerpo">
+        {estado.tipo === 'cargando' && <p className="copia-estado">Trayendo el artículo…</p>}
         {estado.tipo === 'error' && (
-          <p className="panel-status panel-error" role="alert">
-            No se pudo cargar el artículo: {estado.mensaje}
+          <p className="copia-estado copia-error" role="alert">
+            No se pudo traer el artículo: {estado.mensaje}
           </p>
         )}
         {art && (
           <>
-            {art.derogado && <p className="badge-derogado">Artículo derogado</p>}
-            <div className="legal-text">
+            {art.derogado && <Sello titulo="Derogado" tinta="negro" />}
+            <div className="texto-legal">
               {toParagraphs(art.texto).map((p, i) => (
                 <p key={i}>{p}</p>
               ))}
@@ -93,16 +122,33 @@ export function ArticlePanel({ cita, onClose }: Props) {
         )}
       </div>
 
-      {art && (
-        <footer className="panel-foot">
-          {art.fecha_ultima_reforma && (
-            <span>Texto vigente · última reforma de la ley: {fecha(art.fecha_ultima_reforma)}</span>
+      <footer className="copia-pie">
+        {n !== null && (
+          <div className="copia-nav">
+            <button type="button" className="btn btn-fantasma" disabled={n <= 1} onClick={() => onIr(vecino(-1))}>
+              <Icono n="anterior" /> Art. {n - 1}
+            </button>
+            <button type="button" className="btn btn-fantasma" onClick={() => onIr(vecino(1))}>
+              Art. {n + 1} <Icono n="siguiente" />
+            </button>
+          </div>
+        )}
+        <div className="copia-acciones">
+          <button type="button" className="btn btn-fantasma" onClick={copiar}>
+            <Icono n={copiado ? 'listo' : 'copiar'} /> {copiado ? 'Cita copiada' : 'Copiar cita'}
+          </button>
+          {art && (
+            <a className="btn btn-fantasma" href={art.url} target="_blank" rel="noreferrer">
+              PDF oficial <Icono n="externo" />
+            </a>
           )}
-          <a href={art.url} target="_blank" rel="noreferrer">
-            PDF oficial (Cámara de Diputados) ↗
-          </a>
-        </footer>
-      )}
+        </div>
+        {art?.fecha_ultima_reforma && (
+          <p className="copia-vigencia">
+            Texto vigente. Última reforma de la ley: {fecha(art.fecha_ultima_reforma)}.
+          </p>
+        )}
+      </footer>
     </aside>
   )
 }
