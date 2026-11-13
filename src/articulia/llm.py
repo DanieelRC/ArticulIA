@@ -15,16 +15,31 @@ def get_llm(settings: Settings | None = None) -> BaseChatModel:
             raise RuntimeError(f"Falta la API key para LLM_PROVIDER={s.llm_provider} en .env")
         return valor
 
+    # Topes de salida, tiempo y reintentos: acotan el costo de cada llamada.
+    comun = {"temperature": 0, "timeout": s.llm_timeout_s, "max_retries": s.llm_max_retries}
     if s.llm_provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         return ChatGoogleGenerativeAI(
-            model=s.llm_model, api_key=key(s.google_api_key), temperature=0
+            model=s.llm_model,
+            api_key=key(s.google_api_key),
+            max_output_tokens=s.llm_max_output_tokens,
+            **comun,
         )
     if s.llm_provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model=s.llm_model, api_key=key(s.anthropic_api_key), temperature=0)
+        return ChatAnthropic(
+            model=s.llm_model,
+            api_key=key(s.anthropic_api_key),
+            max_tokens=s.llm_max_output_tokens,
+            **comun,
+        )
     from langchain_xai import ChatXAI
 
-    return ChatXAI(model=s.llm_model, api_key=key(s.xai_api_key), temperature=0)
+    return ChatXAI(
+        model=s.llm_model,
+        api_key=key(s.xai_api_key),
+        max_tokens=s.llm_max_output_tokens,
+        **comun,
+    )

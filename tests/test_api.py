@@ -10,8 +10,10 @@ from langchain_core.messages import AIMessage
 
 from articulia.agent.graph import build_graph
 from articulia.agent.state import Respuesta, Verificacion
+from articulia.api.limits import AlmacenMemoria, Guardia
 from articulia.api.main import ServicioNoDisponible, app, get_corpus, get_graph
 from articulia.api.schemas import MAX_PREGUNTA
+from articulia.config import Settings
 
 
 class ApiCorpus(FakeCorpus):
@@ -56,6 +58,18 @@ def _llm_feliz() -> FakeLLM:
         respuestas=[RESPUESTA_OK],
         verificaciones=[Verificacion(respaldada=True)],
     )
+
+
+def _guardia(**kw: object) -> Guardia:
+    return Guardia(Settings(_env_file=None, **kw), AlmacenMemoria())
+
+
+@pytest.fixture(autouse=True)
+def guardia_en_memoria(monkeypatch: pytest.MonkeyPatch) -> Iterator[Guardia]:
+    """Cada prueba tiene su propio control de gasto, sin base de datos."""
+    g = _guardia()
+    monkeypatch.setattr("articulia.api.main._guardia", lambda: g)
+    yield g
 
 
 @pytest.fixture
@@ -265,3 +279,91 @@ def test_health_sin_base_503() -> None:
 def test_openapi_documenta_los_endpoints(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/ask", "/ask/stream", "/laws", "/articles/{ley}/{numero}", "/health"} <= set(paths)
+
+
+# --- Control de gasto -------------------------------------------------------------------------
+
+
+def test_pregunta_repetida_sale_de_cache_sin_llamar_al_llm(
+    client: TestClient, guardia_en_memoria: Guardia
+) -> None:
+    primera = client.post("/ask", json={"pregunta": "¿Cuál es la jornada máxima?"})
+    assert primera.status_code == 200
+    # El grafo de `client` ya gastó su guion: si se volviera a llamar al LLM, fallaría.
+    segunda = client.post("/ask", json={"pregunta": "cual es la jornada maxima"})
+    assert segunda.status_code == 200
+    assert segunda.json() == primera.json()
+
+    r = client.post("/ask/stream", json={"pregunta": "¿CUÁL ES LA JORNADA MÁXIMA?"})
+    eventos = _eventos(r.text)
+    assert [t for t, _ in eventos] == ["paso", "respuesta"]
+    assert eventos[0][1]["nodo"] == "cache"
+    assert eventos[1][1] == primera.json()
+
+
+def test_limite_por_ip_responde_429_con_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    g = _guardia(rate_limit_per_minute=1)
+    monkeypatch.setattr("articulia.api.main._guardia", lambda: g)
+    corpus = ApiCorpus([LFT_59, LFT_61])
+    app.dependency_overrides[get_corpus] = lambda: corpus
+    app.dependency_overrides[get_graph] = lambda: build_graph(_llm_feliz(), corpus)
+    try:
+        with TestClient(app) as c:
+            assert c.post("/ask", json={"pregunta": "¿Jornada máxima?"}).status_code == 200
+            r = c.post("/ask/stream", json={"pregunta": "¿Otra pregunta distinta?"})
+    finally:
+        app.dependency_overrides.clear()
+    assert r.status_code == 429
+    assert "Demasiadas consultas" in r.json()["detail"]
+    assert int(r.headers["retry-after"]) > 0
+
+
+def test_presupuesto_agotado_responde_429_sin_correr_el_agente(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g = _guardia(daily_budget_usd=0.01)
+    g.almacen.sumar_uso(10_000, 10_000, 0.03)
+    monkeypatch.setattr("articulia.api.main._guardia", lambda: g)
+
+    def no_debe_llamarse() -> None:
+        raise AssertionError("El agente no debe correr sin presupuesto")
+
+    app.dependency_overrides[get_graph] = no_debe_llamarse
+    try:
+        with TestClient(app) as c:
+            r = c.post("/ask", json={"pregunta": "¿Jornada máxima?"})
+    finally:
+        app.dependency_overrides.clear()
+    assert r.status_code == 429
+    assert "tope de consultas por hoy" in r.json()["detail"]
+
+
+def test_el_gasto_de_la_consulta_se_registra(
+    client: TestClient, guardia_en_memoria: Guardia
+) -> None:
+    client.post("/ask", json={"pregunta": "¿Cuál es la jornada máxima?"})
+    # El LLM simulado no reporta tokens, pero la consulta debe cerrar y liberar su cupo.
+    for _ in range(3):
+        guardia_en_memoria.admitir("9.9.9.9", f"otra pregunta {_}", None).liberar()
+
+
+def test_consulta_que_supera_el_tope_de_tokens_se_corta(monkeypatch: pytest.MonkeyPatch) -> None:
+    g = _guardia(max_tokens_per_query=0)
+    monkeypatch.setattr("articulia.api.main._guardia", lambda: g)
+    monkeypatch.setattr("articulia.api.main._tokens", lambda uso: (600, 500))
+    corpus = ApiCorpus([LFT_59, LFT_61])
+    app.dependency_overrides[get_graph] = lambda: build_graph(_llm_feliz(), corpus)
+    try:
+        with TestClient(app) as c:
+            r = c.post("/ask/stream", json={"pregunta": "¿Jornada máxima?"})
+    finally:
+        app.dependency_overrides.clear()
+    eventos = _eventos(r.text)
+    assert eventos[-1][0] == "error"
+    assert "máximo de tokens" in eventos[-1][1]["detail"]
+    assert "respuesta" not in [t for t, _ in eventos]
+    assert g.almacen.gasto_hoy() > 0  # lo consumido antes del corte sí se cobra
+
+
+def test_pregunta_de_mas_de_500_caracteres_se_rechaza(client: TestClient) -> None:
+    assert client.post("/ask", json={"pregunta": "x" * 501}).status_code == 422

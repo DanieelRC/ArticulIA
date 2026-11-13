@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from articulia.ingest.loader import LEYES
 
-MAX_PREGUNTA = 1000
+MAX_PREGUNTA = 500
 
 Ley = StrEnum("Ley", {k: k for k in LEYES})  # type: ignore[misc]
 

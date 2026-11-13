@@ -67,17 +67,21 @@ def responder(
 
 
 def pasos(
-    pregunta: str, leyes: list[str] | None = None, graph: CompiledStateGraph | None = None
+    pregunta: str,
+    leyes: list[str] | None = None,
+    graph: CompiledStateGraph | None = None,
+    callbacks: list | None = None,
 ) -> Iterator[tuple[str, dict]]:
     """Itera el avance del agente para streaming.
 
     Produce `(nodo, actualización)` al terminar cada nodo y `("token", {"texto": ...})` por cada
-    fragmento de la respuesta mientras el nodo `generar` la escribe.
+    fragmento de la respuesta mientras el nodo `generar` la escribe. `callbacks` recibe, por
+    ejemplo, un contador de tokens.
     """
     graph = graph or build_graph()
     for modo, chunk in graph.stream(
         _inicial(pregunta, leyes),
-        {"recursion_limit": _RECURSION_LIMIT},
+        {"recursion_limit": _RECURSION_LIMIT, "callbacks": callbacks or []},
         stream_mode=["updates", "custom"],
     ):
         if modo == "custom":
