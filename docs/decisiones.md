@@ -457,3 +457,48 @@ No se evaluaron modelos que exigen `trust_remote_code` (jina-reranker-v2, gte-mu
 ejecutar código descargado del repositorio del modelo no se justifica para una demo pública.
 Todo es configurable: `RERANK_PREFILTER_MODEL` (vacío lo apaga), `RERANK_PREFILTER_KEEP`,
 `RERANKER_INT8`, `RERANK_MAX_LENGTH`.
+
+### Evaluación final (13-11-2026, grok-build-0.1, 60 preguntas)
+
+| Métrica | Resultado | Meta |
+| --- | ---: | ---: |
+| Hit@5 | 0.78 | ≥ 0.85 |
+| MRR | 0.67 | ≥ 0.70 |
+| Recall@5 | 0.73 | |
+| Citas válidas | 1.00 | 1.00 |
+| Cita el artículo esperado | 0.92 | |
+| Abstención correcta | 1.00 | ≥ 0.80 |
+| Abstención indebida | 0.04 | |
+| Fidelidad (Ragas) | 0.90 | ≥ 0.85 |
+| Relevancia de la respuesta (Ragas) | 0.74 | ≥ 0.80 |
+| Latencia por consulta p50 / p95 | 34.1 s / 79.8 s | |
+| Latencia de búsqueda p50 | 4.4 s | |
+| Tokens por consulta (media) | 15,376 | |
+| Iteraciones por consulta (media) | 2.90 | |
+
+La corrida costó 1.16 USD más la repetición de cuatro preguntas que fallaron por un corte de
+conexión con el proveedor (`--reanudar` repitió solo esas).
+
+Cómo leerla:
+- **Cumple lo que el proyecto promete**: ninguna cita inventada, abstención en las 10 preguntas
+  fuera del corpus y fidelidad sobre la meta.
+- **No cumple en recuperación** (hit@5 y MRR): es el límite actual del sistema. El 0.92 de "cita
+  el artículo esperado" es mayor que el hit@5 porque el agente reformula y busca más de una vez.
+- **Relevancia 0.74**: Ragas penaliza respuestas que traen artículos de más. El agente tiende a
+  citar todo lo recuperado sobre el tema (en vacaciones cita 76, 78 y 81), no solo lo preguntado.
+- **Ruido del juez**: la fidelidad dio 0.85 en la primera pasada (56 preguntas) y 0.90 en la
+  final (60). Con un LLM como juez, diferencias de ese tamaño no son concluyentes.
+- **No hay "antes" del agente completo**: la corrida de línea base se perdió al cerrarse la
+  sesión, antes de que la evaluación fuera reanudable. El antes y después medido es el de
+  recuperación (RRF ponderado y cascada) y los casos sueltos anotados arriba.
+
+Fallos del agente en preguntas con respuesta (4 de 50):
+- `lft-paternidad`: se abstuvo. El permiso está en la fracción XXVII Bis del artículo 132 de la
+  LFT, un artículo de 11 mil caracteres; la búsqueda no trae ese fragmento.
+- `lfda-derechos-morales`: se abstuvo aunque recuperó el artículo esperado.
+- `ccf-alimentos-reciproca` y `ccf-divorcio`: citó artículos vecinos (304, 308, 311 en lugar del
+  301; 289 en lugar del 266).
+
+Siguientes mejoras, por orden de impacto esperado: indexar las fracciones de artículos largos
+como unidades propias de búsqueda, ampliar la consulta con términos legales antes de buscar, y
+pedir al redactor que cite solo lo necesario para la pregunta.

@@ -129,11 +129,39 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 ## Evaluación
 
-`eval/dataset.jsonl` tiene las preguntas (formato en [docs/decisiones.md](docs/decisiones.md)).
+Dataset propio de 60 preguntas en lenguaje cotidiano (`eval/dataset.jsonl`): 38 directas, 12 que
+requieren dos artículos o dos leyes y 10 sin respuesta en el corpus. Evaluación del 13 de noviembre
+de 2026 con `grok-build-0.1`. Los números se publican como salieron.
+
+| Métrica | Resultado | Meta | |
+| --- | ---: | ---: | --- |
+| Citas válidas (apuntan a artículos recuperados) | 1.00 | 1.00 | Cumple |
+| Abstención correcta (10 preguntas fuera del corpus) | 1.00 | ≥ 0.80 | Cumple |
+| Fidelidad (Ragas) | 0.90 | ≥ 0.85 | Cumple |
+| Hit@5 | 0.78 | ≥ 0.85 | Aún no cumple |
+| MRR | 0.67 | ≥ 0.70 | Aún no cumple |
+| Relevancia de la respuesta (Ragas) | 0.74 | ≥ 0.80 | Aún no cumple |
+| Cita el artículo esperado | 0.92 | | |
+| Abstención indebida | 0.04 | | |
+| Latencia por consulta, p50 / p95 | 34 s / 80 s | | |
+| Latencia de búsqueda, p50 | 4.4 s | | |
+| Tokens por consulta (media) | 15,376 | | Unos 0.02 USD |
+
+Mejoras medidas (detalle en [docs/decisiones.md](docs/decisiones.md)):
+
+| Cambio | Antes | Después |
+| --- | --- | --- |
+| RRF ponderado (texto completo a 0.5) | Hit@5 0.76, MRR 0.61 | Hit@5 0.78, MRR 0.63 |
+| Reranker en cascada (mMiniLM → bge-reranker-v2-m3 int8) | MRR 0.63, búsqueda en 12.2 s | MRR 0.67, búsqueda en 4.9 s |
+| Recorte de artículos largos al enviarlos al LLM | 33,800 tokens de entrada en una consulta | 8,800 |
+
+Para reproducir:
 
 ```bash
 uv run python eval/run_eval.py --solo-recuperacion   # hit@5 y MRR, sin LLM
-uv run python eval/run_eval.py                       # completa, con agente y Ragas
+uv run python eval/run_eval.py --etiqueta final      # completa, con agente y Ragas
+uv run python eval/run_eval.py --etiqueta final --reanudar   # continuar si se corta
+uv run python eval/bench_reranker.py                 # comparar rerankers
 ```
 
 Imprime una tabla Markdown y guarda el detalle por pregunta en `eval/results/`.
@@ -141,4 +169,11 @@ Con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY` cada consulta queda trazada e
 
 ## Limitaciones
 
-No sustituye asesoría legal.
+- El corpus son seis leyes federales. No sustituye asesoría legal.
+- La búsqueda no encuentra el artículo correcto en una de cada cinco preguntas; cuando eso pasa,
+  el agente suele abstenerse o citar un artículo vecino.
+- Una consulta tarda unos 34 segundos en CPU con un modelo que razona antes de responder.
+- No se incluyen los transitorios de decretos de reforma: el agente no sabe desde cuándo aplica
+  una reforma reciente.
+- Los artículos muy largos se envían recortados al modelo (el fragmento más parecido a la
+  consulta); una respuesta que dependa de otra parte del mismo artículo puede no encontrarse.
