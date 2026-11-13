@@ -502,3 +502,39 @@ Fallos del agente en preguntas con respuesta (4 de 50):
 Siguientes mejoras, por orden de impacto esperado: indexar las fracciones de artículos largos
 como unidades propias de búsqueda, ampliar la consulta con términos legales antes de buscar, y
 pedir al redactor que cite solo lo necesario para la pregunta.
+
+## Fase 7. CI con GitHub Actions
+
+### Tres jobs, y solo uno caro
+- **Backend** y **Frontend** corren en cada push: lint, formato, tipos, pruebas, compilación y
+  `npm audit`. No necesitan base ni API key: las pruebas de integración se saltan solas cuando
+  no hay PostgreSQL o falta la clave del LLM.
+- **Evaluación rápida** corre solo en pull requests, con PostgreSQL y pgvector como servicio.
+
+### Evaluar sobre un subconjunto de leyes
+Indexar el corpus completo tarda 40 minutos en CPU; en cada pull request no es viable. El job
+indexa tres leyes pequeñas (LFPC, LFDA y LFPDPPP: 547 artículos, unos 6 minutos) con
+`python -m articulia.ingest.index --leyes ...` y evalúa las 19 preguntas del dataset que se
+responden con ellas (`run_eval.py --leyes ...`).
+- La guía pedía 10 preguntas. Con 10, cada pregunta mueve el hit@5 diez puntos y el resultado
+  depende de cuáles toquen (las primeras 10 dan 0.70). Con las 19 da 0.79, casi igual al 0.78
+  del corpus completo, así que representa mejor al sistema.
+- `--leyes` en la indexación borra de la base lo que no está en la lista: solo se usa en la base
+  desechable del CI.
+- Los modelos de Hugging Face (unos 5 GB) se guardan con `actions/cache`.
+
+### Umbral 0.70, no 0.85
+El paso falla si hit@5 baja de 0.70. Es un guardia contra regresiones: avisa si un cambio rompe
+la búsqueda. La meta de 0.85 todavía no se cumple, y usarla como umbral dejaría el CI en rojo
+permanente, que es lo mismo que no tener CI.
+
+### El agente en CI es opcional y explícito
+La evaluación de recuperación no usa LLM, así que no cuesta. El paso del agente (10 preguntas,
+sin Ragas, unos 0.20 USD) corre solo si el repositorio define el secreto `XAI_API_KEY`. Los pull
+requests desde forks no reciben secretos, así que nadie externo puede gastar el saldo.
+
+### Otros detalles
+- `permissions: contents: read`: el workflow no puede escribir en el repositorio.
+- `concurrency` cancela la corrida anterior de la misma rama.
+- La tabla de resultados se escribe en el resumen del job (`GITHUB_STEP_SUMMARY`) y el detalle
+  por pregunta se sube como artefacto.

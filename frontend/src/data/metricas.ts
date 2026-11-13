@@ -23,5 +23,7 @@ export const EVALUACION = {
   ] as Metrica[],
 }
 
-export const GITHUB_URL: string | undefined = import.meta.env.VITE_GITHUB_URL || undefined
+/** Repositorio que enlaza la portada; `VITE_GITHUB_URL` lo sustituye al compilar. */
+export const GITHUB_URL: string =
+  import.meta.env.VITE_GITHUB_URL || 'https://github.com/DanieelRC/ArticulIA'
 export const AUTOR = 'Daniel Rodríguez Carreón'

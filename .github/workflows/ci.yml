@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Un push nuevo a la misma rama cancela la corrida anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Sin telemetría ni barras de progreso en los logs.
+  RAGAS_DO_NOT_TRACK: "true"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+jobs:
+  backend:
+    name: Backend (ruff y pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Formato
+        run: uv run ruff format --check .
+      - name: Pruebas
+        # Sin base de datos ni API key: las pruebas de integración se saltan solas.
+        run: uv run pytest -q
+
+  frontend:
+    name: Frontend (tipos, lint y vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Tipos
+        run: npx tsc -b
+      - name: Lint
+        run: npx oxlint src
+      - name: Pruebas
+        run: npm test
+      - name: Compilar
+        run: npm run build
+      - name: Vulnerabilidades en dependencias
+        run: npm audit --audit-level=high
+
+  evaluacion:
+    name: Evaluación rápida de recuperación
+    # Solo en pull requests: indexa y descarga modelos, tarda unos 15 minutos.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: articulia
+          POSTGRES_PASSWORD: articulia
+          POSTGRES_DB: articulia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U articulia -d articulia"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://articulia:articulia@127.0.0.1:5432/articulia
+      # Leyes pequeñas (547 artículos): indexarlas tarda minutos; el corpus completo, 40.
+      LEYES_CI: LFPC LFDA LFPDPPP
+      # Guardia contra regresiones, no la meta del proyecto (0.85). Medido: 0.79.
+      UMBRAL_HIT5: "0.70"
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      LLM_PROVIDER: xai
+      LLM_MODEL: grok-build-0.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Instalar dependencias
+        run: uv sync --frozen
+      - name: Caché de modelos de Hugging Face
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-modelos-v1-${{ hashFiles('src/articulia/config.py') }}
+          restore-keys: hf-modelos-v1-
+      - name: Indexar el subconjunto de leyes
+        run: uv run python -m articulia.ingest.index --leyes $LEYES_CI
+      - name: Pruebas de la base (extensión vector)
+        run: uv run pytest -q tests/test_db.py
+      - name: Hit@5 y MRR (sin LLM)
+        run: |
+          uv run python eval/run_eval.py --solo-recuperacion --leyes $LEYES_CI \
+            --umbral-hit5 $UMBRAL_HIT5 --etiqueta ci | tee recuperacion.md
+          cat recuperacion.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Agente con LLM (solo si el repositorio tiene el secreto XAI_API_KEY)
+        # Los pull requests desde forks no reciben secretos: este paso se salta y no gasta.
+        if: env.XAI_API_KEY != ''
+        run: |
+          uv run python eval/run_eval.py --leyes $LEYES_CI --limite 10 --sin-ragas \
+            --umbral-hit5 $UMBRAL_HIT5 --etiqueta ci-agente | tee agente.md
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          cat agente.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Guardar resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluacion
+          path: eval/results/
+          if-no-files-found: ignore

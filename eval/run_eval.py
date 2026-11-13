@@ -266,6 +266,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dataset", type=Path, default=RAIZ / "eval" / "dataset.jsonl")
     ap.add_argument("--salida", type=Path, default=RAIZ / "eval" / "results")
     ap.add_argument("--limite", type=int, help="Evaluar solo las primeras N preguntas.")
+    ap.add_argument(
+        "--leyes", nargs="+", help="Solo preguntas que se responden con estas leyes (CI)."
+    )
     ap.add_argument("--solo-recuperacion", action="store_true", help="Sin LLM: hit@5 y MRR.")
     ap.add_argument("--sin-reranker", action="store_true")
     ap.add_argument("--sin-ragas", action="store_true", help="Omitir fidelidad y relevancia.")
@@ -277,8 +280,15 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     preguntas = cargar_dataset(args.dataset, ids_del_corpus(RAIZ / "data" / "processed"))
+    if args.leyes:
+        # Evaluación sobre un corpus parcial (CI): solo preguntas cuya respuesta está en esas leyes.
+        claves = {ley.upper() for ley in args.leyes}
+        preguntas = [p for p in preguntas if p.leyes and p.leyes <= claves]
     if args.limite:
         preguntas = preguntas[: args.limite]
+    if not preguntas:
+        print("No hay preguntas que evaluar con esos filtros.", file=sys.stderr)
+        return 2
     print(f"Dataset: {resumen_dataset(preguntas)}", file=sys.stderr)
 
     usar_reranker = not args.sin_reranker

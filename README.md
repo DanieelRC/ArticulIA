@@ -1,5 +1,7 @@
 # ArticulIA
 
+[![CI](https://github.com/DanieelRC/ArticulIA/actions/workflows/ci.yml/badge.svg)](https://github.com/DanieelRC/ArticulIA/actions/workflows/ci.yml)
+
 Agente que responde preguntas sobre leyes federales mexicanas citando el artículo exacto.
 Si no encuentra evidencia en el corpus, lo dice en lugar de inventar.
 
@@ -166,6 +168,20 @@ uv run python eval/bench_reranker.py                 # comparar rerankers
 
 Imprime una tabla Markdown y guarda el detalle por pregunta en `eval/results/`.
 Con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY` cada consulta queda trazada en LangSmith.
+
+## Integración continua
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en GitHub Actions:
+
+| Job | Cuándo | Qué hace |
+| --- | --- | --- |
+| Backend | Cada push | `ruff check`, `ruff format --check` y `pytest` |
+| Frontend | Cada push | Tipos, lint, pruebas, compilación y `npm audit` |
+| Evaluación rápida | Pull requests | Levanta PostgreSQL con pgvector, indexa tres leyes (LFPC, LFDA, LFPDPPP) y falla si hit@5 baja de 0.70 sobre sus 19 preguntas |
+
+El umbral es un guardia contra regresiones (hoy mide 0.79), no la meta del proyecto. Si el
+repositorio tiene el secreto `XAI_API_KEY`, el job corre además el agente en 10 preguntas (unos
+0.20 USD por pull request); sin el secreto, ese paso se salta y el CI no cuesta nada.
 
 ## Limitaciones
 

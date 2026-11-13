@@ -138,11 +138,18 @@ def index_articles(conn: psycopg.Connection, articles: list[Article]) -> dict[st
     }
 
 
-def main(processed_dir: Path) -> None:
-    """Aplica el esquema e indexa el corpus."""
+def main(processed_dir: Path, leyes: list[str] | None = None) -> None:
+    """Aplica el esquema e indexa el corpus.
+
+    Con `leyes` se indexa solo ese subconjunto. Como la indexación borra lo que no está en la
+    lista, eso solo debe usarse sobre una base desechable (la del CI), nunca sobre la principal.
+    """
     articles = load_articles(processed_dir)
+    if leyes:
+        claves = {ley.upper() for ley in leyes}
+        articles = [a for a in articles if a.ley in claves]
     if not articles:
-        sys.exit(f"No hay JSONL en {processed_dir}; corre `python -m articulia.ingest` primero.")
+        sys.exit(f"No hay artículos que indexar en {processed_dir}.")
     start = time.perf_counter()
     with connect() as conn:
         apply_schema(conn)
@@ -151,4 +158,14 @@ def main(processed_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/processed"))
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Indexa data/processed en PostgreSQL.")
+    ap.add_argument("processed_dir", nargs="?", type=Path, default=Path("data/processed"))
+    ap.add_argument(
+        "--leyes",
+        nargs="+",
+        help="Indexar solo estas leyes (BORRA las demás de la base: usar solo en CI).",
+    )
+    args = ap.parse_args()
+    main(args.processed_dir, args.leyes)
