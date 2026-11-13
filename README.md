@@ -58,7 +58,7 @@ Documentación interactiva (OpenAPI) en http://localhost:8000/docs.
 { "pregunta": "¿Cuántos días de vacaciones me tocan en mi primer año?", "leyes": ["LFT"] }
 ```
 
-`pregunta` es obligatoria (3 a 1000 caracteres); `leyes` es opcional (`CPEUM`, `LFT`, `CCF`,
+`pregunta` es obligatoria (3 a 500 caracteres); `leyes` es opcional (`CPEUM`, `LFT`, `CCF`,
 `LFPDPPP`, `LFDA`, `LFPC`). Respuesta:
 
 ```json
@@ -75,7 +75,9 @@ Si no hay evidencia en el corpus, `sin_evidencia` es `true` y `citas` va vacía.
 **`POST /ask/stream`** (Server-Sent Events). Mismo cuerpo que `/ask`. Emite:
 
 - `event: paso` por cada nodo del agente: `{"nodo": "herramientas", "mensaje": "5 artículos recuperados", "articulos": ["LFT-76", …]}`
-- `event: respuesta` al final, con el mismo JSON que `/ask`
+- `event: token` con cada fragmento de la respuesta mientras se escribe: `{"texto": "Las personas "}`
+- `event: borrador_descartado` si el verificador rechaza lo escrito (hay que limpiar el texto parcial)
+- `event: respuesta` al final, ya verificada, con el mismo JSON que `/ask`
 - `event: error` si algo falla después de empezar el stream
 
 ```bash
@@ -83,8 +85,16 @@ curl -N -X POST localhost:8000/ask/stream -H "Content-Type: application/json" \
   -d '{"pregunta": "¿Cuántas horas dura la jornada diurna?"}'
 ```
 
-**Errores:** 422 si la entrada no es válida, 404 si el artículo no existe, 503 si falta la API key
-del LLM o la base no responde, 500 con un mensaje genérico (el detalle queda en los logs).
+**Errores:** 422 si la entrada no es válida, 404 si el artículo no existe, 429 si se alcanzó el
+límite por IP o el tope de gasto diario (con `Retry-After`), 503 si falta la API key, la base no
+responde o hay demasiadas consultas en curso, 500 con un mensaje genérico (el detalle queda en
+los logs).
+
+### Control de gasto
+
+Cada pregunta cuesta dinero en el proveedor del LLM. La API lo acota con un tope de gasto diario,
+límite por IP, caché de respuestas, topes de tokens y cupo de concurrencia; todo se configura por
+variables de entorno (ver `.env.example`) y se explica en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md).
 
 ## Interfaz web
 
@@ -99,10 +109,23 @@ npm run dev
 
 Abre http://localhost:5173; Vite redirige `/api` a `localhost:8000`. Pruebas: `npm test`.
 
-- Muestra los pasos del agente mientras trabaja (`/ask/stream`).
-- Cada cita `[LFT, art. 61]` es un botón que abre el texto completo del artículo en un panel lateral,
-  con su ubicación en la ley, historial de reformas y enlace al PDF oficial.
+- **Portada** (`/`): qué hace, cómo funciona, el corpus y las métricas reales de la evaluación.
+- **Consulta** (`/consulta`): la respuesta se escribe en vivo; al pasar la verificación recibe el
+  sello «Cotejado». Cada cita abre el texto completo del artículo, con navegación al artículo
+  vecino y enlace al PDF oficial.
+- **Archivo**: las consultas se guardan en el navegador y se pueden reabrir o borrar.
 - Filtro por ley; sin selección busca en todo el corpus.
+
+La dirección visual está documentada en [DESIGN.md](DESIGN.md). Para mostrar el enlace al
+repositorio en la portada, define `VITE_GITHUB_URL` al compilar la interfaz.
+
+## Despliegue
+
+Guía completa para un VPS con HTTPS en [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
 
 ## Evaluación
 

@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 COPY . .
+# Enlace al repositorio que muestra la portada (opcional).
+ARG VITE_GITHUB_URL=""
+ENV VITE_GITHUB_URL=$VITE_GITHUB_URL
 RUN npm run build
 
 FROM nginx:1.29-alpine
