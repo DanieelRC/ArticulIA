@@ -317,3 +317,21 @@ Con Gemini, "¿Cuántos días de vacaciones me tocan en mi primer año de trabaj
 en abstención aunque el agente recuperó LFT 76. El generador argumenta que el 76 habla de "más de
 un año de servicios" y se abstiene, y el razonamiento gasta 4 de 5 iteraciones volviendo a buscar
 lo que ya tenía. Es candidato a la iteración de mejora; se medirá antes y después con el dataset.
+
+### Línea base de recuperación y primera mejora: RRF ponderado
+Dataset de 60 preguntas (50 con respuesta). Medido el 12-11-2026 en CPU:
+
+| Configuración | Hit@5 | MRR | Recall@5 | Latencia p50 |
+| --- | ---: | ---: | ---: | ---: |
+| RRF original, sin reranker | 0.50 | 0.40 | 0.44 | 0.4 s |
+| RRF ponderado (texto 0.5), sin reranker | 0.60 | 0.45 | 0.53 | 0.6 s |
+| RRF original + reranker | 0.76 | 0.61 | 0.73 | 22.2 s |
+| RRF ponderado + reranker | 0.78 | 0.63 | 0.75 | 16.4 s |
+
+Diagnóstico: en las preguntas falladas, el artículo esperado solía estar bien colocado en la
+búsqueda vectorial (posición 1 a 14) pero muy abajo o ausente en la de texto completo, y la fusión
+con pesos iguales lo sacaba de los 20 candidatos que ve el reranker. Las preguntas están en
+lenguaje cotidiano ("me tocan", "papá") y comparten pocas palabras con el texto legal, así que el
+texto completo mete ruido. Con `RRF_TEXT_WEIGHT=0.5` el artículo esperado llega al reranker en el
+90 % de las preguntas (antes 82 %). No se quitó el texto completo: sigue siendo lo que encuentra
+números de artículo y términos exactos.

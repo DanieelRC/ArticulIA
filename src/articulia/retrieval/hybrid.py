@@ -21,17 +21,21 @@ class Candidate:
     fragmento: str | None = None
 
 
-def reciprocal_rank_fusion(rankings: dict[str, Sequence[str]], k: int = 60) -> list[Candidate]:
-    """Fusiona listas ordenadas: score(d) = Σ 1 / (k + rango_i(d)), con rangos desde 1.
+def reciprocal_rank_fusion(
+    rankings: dict[str, Sequence[str]], k: int = 60, weights: dict[str, float] | None = None
+) -> list[Candidate]:
+    """Fusiona listas ordenadas: score(d) = Σ w_i / (k + rango_i(d)), con rangos desde 1.
 
     Solo usa posiciones, no puntajes, así que no hay que calibrar la distancia coseno contra
-    el puntaje de `ts_rank`, que viven en escalas distintas.
+    el puntaje de `ts_rank`, que viven en escalas distintas. Sin `weights`, todas pesan 1.
     """
+    weights = weights or {}
     fused: dict[str, Candidate] = {}
     for source, ids in rankings.items():
+        w = weights.get(source, 1.0)
         for rank, article_id in enumerate(ids, start=1):
             cand = fused.setdefault(article_id, Candidate(article_id))
-            cand.score += 1.0 / (k + rank)
+            cand.score += w / (k + rank)
             cand.ranks[source] = rank
     return sorted(fused.values(), key=lambda c: c.score, reverse=True)
 
@@ -117,6 +121,7 @@ def hybrid_search(
             "texto": text_search(conn, query, leyes),
         },
         k=get_settings().rrf_k,
+        weights={"texto": get_settings().rrf_text_weight},
     )[:limit]
     best = dict(
         conn.execute(

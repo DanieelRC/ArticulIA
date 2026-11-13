@@ -125,3 +125,12 @@ def test_busqueda_hibrida_en_menos_de_un_segundo(conn: psycopg.Connection) -> No
     results = search(conn, pregunta, use_reranker=False)
     assert time.perf_counter() - start < 1.0
     assert "LFT-76" in [r.id for r in results]
+
+
+def test_rrf_ponderado_baja_el_peso_del_texto() -> None:
+    rankings = {"vector": ["A"], "texto": ["B"]}
+    iguales = reciprocal_rank_fusion(rankings)
+    assert iguales[0].score == pytest.approx(iguales[1].score)  # sin pesos, empate
+    ponderado = reciprocal_rank_fusion(rankings, weights={"texto": 0.5})
+    assert [c.article_id for c in ponderado] == ["A", "B"]
+    assert ponderado[1].score == pytest.approx(0.5 / 61)
