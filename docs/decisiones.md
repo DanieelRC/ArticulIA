@@ -419,3 +419,41 @@ porque la escribe `generar`) y repetía búsquedas hasta agotar las 5 iteracione
 `run_eval.py` escribe cada pregunta en `eval/results/_progreso-*.jsonl` al terminarla;
 `--reanudar` continúa donde se quedó. Una corrida completa se perdió al cerrarse la sesión; con
 esto ya no se paga dos veces.
+
+### Reranker: cascada en lugar de un solo modelo
+Medido con `eval/bench_reranker.py` sobre las 50 preguntas con respuesta, en CPU (Ryzen 5 4600H),
+un solo proceso. Los candidatos de la búsqueda híbrida son los mismos para todas las filas.
+
+| Reranker | Hit@5 | MRR | Latencia p50 | p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Sin reranker | 0.60 | 0.45 | 0.6 s | |
+| bge-reranker-v2-m3, 20 candidatos, 512 tokens (anterior) | 0.78 | 0.63 | 12.2 s | 17.2 s |
+| v2-m3, 20 candidatos, 256 tokens | 0.82 | 0.64 | 10.8 s | 14.0 s |
+| v2-m3 int8, 20 candidatos, 256 tokens | 0.80 | 0.63 | 8.5 s | 10.6 s |
+| v2-m3, 12 candidatos, 256 tokens | 0.76 | 0.62 | 6.8 s | 9.2 s |
+| bge-reranker-base, 20 candidatos | 0.68 | 0.45 | 3.1 s | 3.9 s |
+| bge-reranker-base int8 | 0.64 | 0.38 | 2.6 s | 3.3 s |
+| mMiniLM-L12 mmarco, 20 candidatos | 0.72 | 0.53 | 0.9 s | 1.3 s |
+| Cascada: mMiniLM → 6 → v2-m3 int8 | 0.76 | 0.64 | 3.7 s | 4.7 s |
+| **Cascada: mMiniLM → 8 → v2-m3 int8 (elegida)** | **0.78** | **0.67** | **4.9 s** | 6.1 s |
+| Cascada: mMiniLM → 8 → v2-m3 | 0.80 | 0.64 | 6.1 s | 7.8 s |
+
+Lectura:
+- Ningún modelo solo da a la vez calidad y velocidad. Los ligeros pierden de 6 a 14 puntos de
+  hit@5; el grande tarda 12 s porque procesa 20 pares largos.
+- La cascada usa cada modelo para lo que sirve: el ligero (118 M de parámetros) descarta lo
+  claramente irrelevante en 0.9 s, y el grande, cuantizado a int8, ordena solo 8 candidatos.
+- Elegida: mismo hit@5 que antes (0.78), mejor MRR (0.67 contra 0.63) y 2.5 veces más rápida.
+  Con 6 candidatos era aún más rápida (3.7 s), pero dejaba fuera LFT 61 en "jornada máxima de
+  trabajo" (el prefiltro lo pone en el lugar 8), que es la prueba de aceptación de la Fase 2.
+- La meta de 1 a 3 s no se alcanzó en este CPU. Lo que queda por probar es exportar a ONNX o
+  correr con GPU; no se hizo.
+- Recortar a 256 tokens ayuda a calidad y velocidad: los fragmentos ya son cortos y el relleno
+  hasta 512 solo costaba tiempo.
+- Con 50 preguntas, 0.02 de hit@5 es una sola pregunta: las diferencias chicas entre filas no
+  son concluyentes.
+
+No se evaluaron modelos que exigen `trust_remote_code` (jina-reranker-v2, gte-multilingual):
+ejecutar código descargado del repositorio del modelo no se justifica para una demo pública.
+Todo es configurable: `RERANK_PREFILTER_MODEL` (vacío lo apaga), `RERANK_PREFILTER_KEEP`,
+`RERANKER_INT8`, `RERANK_MAX_LENGTH`.

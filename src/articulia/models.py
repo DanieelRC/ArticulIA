@@ -19,10 +19,29 @@ def get_embedder() -> SentenceTransformer:
     return model
 
 
+def _cross_encoder(modelo: str, int8: bool) -> CrossEncoder:
+    ce = CrossEncoder(modelo, max_length=get_settings().rerank_max_length, device="cpu")
+    if int8:
+        import torch
+
+        # Cuantización dinámica de las capas lineales: menos tiempo en CPU con casi la misma
+        # calidad (medido en eval/bench_reranker.py).
+        torch.quantization.quantize_dynamic(ce, {torch.nn.Linear}, dtype=torch.qint8, inplace=True)
+    return ce
+
+
 @lru_cache
 def get_reranker() -> CrossEncoder:
-    """Cross-encoder para reordenar candidatos (bge-reranker-v2-m3)."""
-    return CrossEncoder(get_settings().reranker_model, max_length=MAX_TOKENS, device="cpu")
+    """Cross-encoder principal para reordenar candidatos (bge-reranker-v2-m3)."""
+    s = get_settings()
+    return _cross_encoder(s.reranker_model, s.reranker_int8)
+
+
+@lru_cache
+def get_prefilter() -> CrossEncoder | None:
+    """Cross-encoder ligero que recorta candidatos antes del principal (None si está apagado)."""
+    s = get_settings()
+    return _cross_encoder(s.rerank_prefilter_model, False) if s.rerank_prefilter_model else None
 
 
 def embed(texts: list[str], batch_size: int = 16) -> np.ndarray:

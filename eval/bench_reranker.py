@@ -49,9 +49,8 @@ def cargar(modelo: str, max_length: int, int8: bool):  # noqa: ANN201
 
     ce = CrossEncoder(modelo, max_length=max_length, device="cpu")
     if int8:
-        ce.model = torch.quantization.quantize_dynamic(
-            ce.model, {torch.nn.Linear}, dtype=torch.qint8
-        )
+        # Sobre el módulo completo y en sitio: reemplazar solo `ce.model` rompe la envoltura.
+        torch.quantization.quantize_dynamic(ce, {torch.nn.Linear}, dtype=torch.qint8, inplace=True)
     return ce
 
 
@@ -72,7 +71,8 @@ def main() -> None:
 
     filas = []
     cache: dict[tuple, object] = {}
-    for etiqueta, modelo, n, max_len, int8 in CONFIGS:
+    desde = int(os.environ.get("BENCH_DESDE", "0"))  # saltar configuraciones ya medidas
+    for etiqueta, modelo, n, max_len, int8 in CONFIGS[desde:]:
         clave = (modelo, max_len, int8)
         if clave not in cache:
             cache[clave] = cargar(modelo, max_len, int8)

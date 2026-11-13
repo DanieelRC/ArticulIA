@@ -29,7 +29,12 @@ class Settings(BaseSettings):
     # Peso del texto completo en RRF (el vectorial pesa 1). Ver docs/decisiones.md, Fase 6.
     rrf_text_weight: float = 0.5
     rerank_candidates: int = 20
-    # En CPU el reranker tarda ~7 s por consulta (20 candidatos); se puede apagar para desarrollo.
+    # Cascada de reranking, elegida con eval/bench_reranker.py (ver docs/decisiones.md).
+    rerank_max_length: int = 256
+    reranker_int8: bool = True
+    rerank_prefilter_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"  # "" lo apaga
+    rerank_prefilter_keep: int = 8
+    # Se puede apagar para desarrollo: la búsqueda baja de ~4 s a ~0.5 s y pierde calidad.
     reranker_enabled: bool = True
 
     # Control de gasto y abuso (ver articulia/api/limits.py)

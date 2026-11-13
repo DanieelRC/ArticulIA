@@ -53,10 +53,11 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         def calentar() -> None:
             try:
-                from articulia.models import embed, get_reranker
+                from articulia.models import embed, get_prefilter, get_reranker
 
                 embed(["calentamiento"])
                 if _settings.reranker_enabled:
+                    get_prefilter()
                     get_reranker()
             except Exception:
                 log.exception("No se pudieron precargar los modelos")
